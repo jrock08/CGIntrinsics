@@ -1222,7 +1222,7 @@ class JointLoss(nn.Module):
 
         self.total_loss = total_loss
 
-        return total_loss.data[0]
+        return total_loss.data.item()
 
 
     def compute_whdr(self, reflectance, judgements, delta=0.1):
