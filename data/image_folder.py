@@ -471,7 +471,7 @@ class IIW_ImageFolder(data.Dataset):
     def iiw_loader(self, img_path):
         
         img_path = img_path[-1][:-3]
-        img_path = self.root + "/IIW/iiw-dataset/data/" + img_path
+        img_path = self.root + "CGIntrinsics/IIW/data/" + img_path
         img = np.float32(io.imread(img_path))/ 255.0
         oringinal_shape = img.shape
 

@@ -103,6 +103,13 @@ class Intrinsics_Model(BaseModel):
         self.optimizer_G.step()
         return joint_loss
 
+    def validate_intrinsics(self, epoch, data_set_name):
+        self.forward_both()
+        self.loss_joint = self.criterion_joint(self.input_images , self.prediction_R, self.prediction_S, 
+                                                    self.targets, data_set_name, epoch)
+        print("validation loss is %f"%self.loss_joint)
+        return self.loss_joint
+
     def evlaute_iiw(self, input_, targets):
         # switch to evaluation mode
         input_images = Variable(input_.cuda() , requires_grad = False)

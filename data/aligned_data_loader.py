@@ -8,6 +8,8 @@ from builtins import object
 import sys
 import h5py
 
+NUM_WORKERS=2
+
 class IIWTestData(object):
     def __init__(self, data_loader):
         self.data_loader = data_loader
@@ -227,7 +229,7 @@ class CGIntrinsicsData(object):
 
         target_1['eq_mat'] = []
         target_1['ineq_mat'] = []
-        
+
         # This part will make training much slower, but it will improve performance
         for i in range(len(target_1["CGIntrinsics_ordinal_path"])):
             mat_path = target_1["CGIntrinsics_ordinal_path"][i]
@@ -372,13 +374,33 @@ class IIWData(object):
 
         return {'img_1': final_img, 'target_1': target_1}
 
+class CGIntrinsics_TEST_DataLoader(BaseDataLoader):
+    def __init__(self,_root, _list_dir, batch_size):
+        transform = None
+        dataset = CGIntrinsicsImageFolder(root=_root, \
+                list_dir =_list_dir)
+
+        self.data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= False, num_workers=int(NUM_WORKERS))
+        self.dataset = dataset
+        flip = False
+        self.paired_data = CGIntrinsicsData(self.data_loader, _root)
+
+    def name(self):
+        return 'CGIntrinsics_DataLoader'
+
+    def load_data(self):
+        return self.paired_data
+
+    def __len__(self):
+        return len(self.dataset)
+
 class CGIntrinsics_DataLoader(BaseDataLoader):
     def __init__(self,_root, _list_dir, batch_size):
         transform = None
         dataset = CGIntrinsicsImageFolder(root=_root, \
                 list_dir =_list_dir)
 
-        self.data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= True, num_workers=int(2))
+        self.data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= True, num_workers=int(NUM_WORKERS))
         self.dataset = dataset
         flip = False    
         self.paired_data = CGIntrinsicsData(self.data_loader, _root)
@@ -404,7 +426,7 @@ class SAWDataLoader(BaseDataLoader):
         dataset = SAW_ImageFolder(root=_root, \
                 list_dir =_list_dir, mode = mode, is_flip = True, transform=transform)
 
-        data_loader = torch.utils.data.DataLoader(dataset, batch_size= batch_size, shuffle= True, num_workers=int(2))
+        data_loader = torch.utils.data.DataLoader(dataset, batch_size= batch_size, shuffle= True, num_workers=int(NUM_WORKERS))
 
         self.dataset = dataset
         # flip = False
@@ -440,7 +462,7 @@ class IIWDataLoader(BaseDataLoader):
         dataset = IIW_ImageFolder(root=_root, \
                     list_dir =_list_dir, mode = mode, is_flip = True, transform=transform)
 
-        data_loader = torch.utils.data.DataLoader(dataset, batch_size= batch_size, shuffle= True, num_workers=int(2))
+        data_loader = torch.utils.data.DataLoader(dataset, batch_size= batch_size, shuffle= True, num_workers=int(NUM_WORKERS))
 
         self.dataset = dataset
         flip = False
@@ -464,7 +486,7 @@ class RenderDataLoader(BaseDataLoader):
         dataset = Render_ImageFolder(root=_root, \
                 list_dir =_list_dir, transform=transform)
 
-        self.data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= True, num_workers=int(1))
+        self.data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= True, num_workers=int(NUM_WORKERS))
         self.dataset = dataset
 
     def name(self):
@@ -476,6 +498,28 @@ class RenderDataLoader(BaseDataLoader):
     def __len__(self):
         return len(self.dataset)
 
+# IIWVal and IIWTest are the same except that IIWVal uses all of the additional long-range annotations rather than just the initial dataset.
+class IIWValDataLoader(BaseDataLoader):
+    def __init__(self,_root, _list_dir, mode, batch_size=16):
+
+        transform = None
+        dataset = IIW_ImageFolder(root=_root, \
+                list_dir =_list_dir, mode= mode, is_flip = False, transform=transform)
+
+        data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= False, num_workers=int(NUM_WORKERS))
+        self.dataset = dataset
+        self.iiw_data = IIWData(data_loader, False)
+
+    def name(self):
+        return 'IIWValDataLoader'
+
+    def load_data(self):
+        return self.iiw_data
+
+    def __len__(self):
+        return len(self.dataset)
+
+
 
 class IIWTESTDataLoader(BaseDataLoader):
     def __init__(self,_root, _list_dir, mode, batch_size=16):
@@ -484,7 +528,7 @@ class IIWTESTDataLoader(BaseDataLoader):
         dataset = IIW_ImageFolder(root=_root, \
                 list_dir =_list_dir, mode= mode, is_flip = False, transform=transform)
 
-        data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= False, num_workers=int(1))
+        data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= False, num_workers=int(NUM_WORKERS))
         self.dataset = dataset
         self.iiw_data = IIWTestData(data_loader)
 

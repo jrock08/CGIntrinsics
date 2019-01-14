@@ -37,6 +37,12 @@ def CreateDataLoaderRender(_root, _list_dir, batch_size=16):
 
     return data_loader
 
+def CreateDataLoaderIIWVal(_root, _list_dir, mode, batch_size=16):
+    data_loader = None
+    from data.aligned_data_loader import IIWValDataLoader
+    data_loader = IIWValDataLoader(_root, _list_dir, mode, batch_size)
+
+    return data_loader
 
 def CreateDataLoaderIIWTest(_root, _list_dir, mode, batch_size=16):
     data_loader = None
@@ -44,7 +50,6 @@ def CreateDataLoaderIIWTest(_root, _list_dir, mode, batch_size=16):
     data_loader = IIWTESTDataLoader(_root, _list_dir, mode, batch_size)
 
     return data_loader
-
 
 def CreateDataLoaderOpenSurfaces(_root, _list_dir, mode, batch_size=16):
     data_loader = None
@@ -57,6 +62,12 @@ def CreateDataLoaderCGIntrinsics(_root, _list_dir, batch_size=16):
     data_loader = None
     from data.aligned_data_loader import CGIntrinsics_DataLoader
     data_loader = CGIntrinsics_DataLoader(_root, _list_dir, batch_size)
+    return data_loader
+
+def CreateDataLoaderCGIntrinsicsTest(_root, _list_dir, batch_size=16):
+    data_loader = None
+    from data.aligned_data_loader import CGIntrinsics_TEST_DataLoader
+    data_loader = CGIntrinsics_TEST_DataLoader(_root, _list_dir, batch_size)
     return data_loader
 
 
