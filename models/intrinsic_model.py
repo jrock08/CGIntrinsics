@@ -88,7 +88,7 @@ class Intrinsics_Model(BaseModel):
         # Combined loss
         self.loss_joint = self.criterion_joint(self.input_images , self.prediction_R, self.prediction_S, 
                                                     self.targets, data_set_name, epoch)
-        print("trainning loss is %f"%self.loss_joint)
+        print("training loss is %f"%self.loss_joint)
         self.loss_joint_var = self.criterion_joint.get_loss_var()
         self.loss_joint_var.backward()
 
@@ -105,6 +105,7 @@ class Intrinsics_Model(BaseModel):
 
     def validate_intrinsics(self, epoch, data_set_name):
         self.forward_both()
+        self.optimizer_G.zero_grad()
         self.loss_joint = self.criterion_joint(self.input_images , self.prediction_R, self.prediction_S, 
                                                     self.targets, data_set_name, epoch)
         print("validation loss is %f"%self.loss_joint)

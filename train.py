@@ -18,15 +18,15 @@ from models.models import create_model
 import torch
 import math
 
-DEBUG = True
-batch_size = 4
+DEBUG = False
+batch_size = 6*4
 train_on_IIW = True
 train_on_SAW = False
 
 
 opt = TrainOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
 #root = "/home/zl548/phoenix24/"
-full_root = '/data/IIW_2019/'
+full_root = '/data/jrock/IIW_2019/'
 
 train_list_CGIntrinsics = full_root + '/CGIntrinsics/intrinsics_final/train_val_list/train_list/'
 data_loader_S = CreateDataLoaderCGIntrinsics(full_root, train_list_CGIntrinsics, batch_size)
