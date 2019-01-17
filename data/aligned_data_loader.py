@@ -317,7 +317,7 @@ class CGIntrinsics_DataLoader(BaseDataLoader):
     def __init__(self,_root, _list_dir, batch_size):
         transform = None
         dataset = CGIntrinsicsImageFolder(root=_root, \
-                list_dir =_list_dir)
+                list_dir =_list_dir, clamp_pairs=100)
 
         self.data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= True, num_workers=int(NUM_WORKERS), collate_fn=my_collate)
         self.dataset = dataset

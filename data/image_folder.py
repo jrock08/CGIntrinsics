@@ -63,7 +63,7 @@ def rgb_to_chromaticity(rgb):
 class CGIntrinsicsImageFolder(data.Dataset):
 
     def __init__(self, root, list_dir, transform=None,
-                 loader=None):
+                 loader=None, clamp_pairs=-1):
         # load image list from hdf5
         img_list = make_dataset(list_dir)
         if len(img_list) == 0:
@@ -93,6 +93,7 @@ class CGIntrinsicsImageFolder(data.Dataset):
             self.stat_dict[line[0]] = float(line[2])
             line = f.readline()
         f.close()
+        self.clamp_pairs = clamp_pairs
 
     def DA(self, img, mode, random_pos, random_filp):
 
@@ -208,46 +209,69 @@ class CGIntrinsicsImageFolder(data.Dataset):
         return srgb_img, gt_R, gt_S, mask, random_filp
 
     def CGIntrinsics_pair(self, path, gt_albedo, random_filp):
+        import time
+
+        st = time.time()
         super_pixel_path = self.root + "/CGIntrinsics/intrinsics_final/superpixels/" + path + ".mat"
         super_pixel_mat = sio.loadmat(super_pixel_path)
         super_pixel_mat = super_pixel_mat['data']
+        en = time.time()
+        load_time = en-st
 
+        st = time.time()
         final_list = []
-
         for i in range(len(super_pixel_mat)):
-            pos =super_pixel_mat[i][0]
+            pos = super_pixel_mat[i][0]
 
             if pos.shape[0] < 2:
                 continue
 
             rad_idx = random.randint(0, pos.shape[0]-1)
             final_list.append( (pos[rad_idx,0], pos[rad_idx,1]) )
+        en = time.time()
+        final_list_time = en-st
 
+        if self.clamp_pairs > 0 and len(final_list) > self.clamp_pairs:
+            final_list = random.sample(final_list, self.clamp_pairs)
+
+        final_list_len = len(final_list)
+
+        st = time.time()
         eq_list = []
         ineq_list = []
 
         row = gt_albedo.shape[0]
         col = gt_albedo.shape[1]
 
-        for i in range(0,len(final_list)-1):
+        for i in range(0, len(final_list)-1):
+            y_1, x_1 = final_list[i]
+
+            y_1 = int(y_1*row)
+            x_1 = int(x_1*col)
+
+            if random_filp:
+                x_1 = col - 1 - x_1
+
+            v_1 = gt_albedo[y_1, x_1]
+
+            if v_1 < 2e-4:
+                continue
+
             for j in range(i+1, len(final_list)):
-                y_1, x_1 = final_list[i]
                 y_2, x_2 = final_list[j]
 
-                y_1 = int(y_1*row)
-                x_1 = int(x_1*col)
                 y_2 = int(y_2*row)
                 x_2 = int(x_2*col)
 
-                # if image is flip
                 if random_filp:
-                    x_1 = col - 1 - x_1
                     x_2 = col - 1 - x_2
 
-                if gt_albedo[y_1, x_1] < 2e-4 or gt_albedo[y_2, x_2] < 2e-4:
+                v_2 = gt_albedo[y_2, x_2]
+
+                if v_2 < 2e-4:
                     continue
 
-                ratio = gt_albedo[y_1, x_1]/gt_albedo[y_2, x_2]
+                ratio = v_1 / v_2
 
                 if ratio < 1.05 and ratio > 1./1.05:
                     eq_list.append([y_1, x_1, y_2, x_2])
@@ -255,9 +279,13 @@ class CGIntrinsicsImageFolder(data.Dataset):
                     ineq_list.append([y_1, x_1, y_2, x_2])
                 elif ratio < 1./1.5:
                     ineq_list.append([y_2, x_2, y_1, x_1])
+        en = time.time()
+        ineq_list_time = en-st
 
         eq_mat = np.asarray(eq_list)
         ineq_mat = np.asarray(ineq_list)
+
+        #print 'load_time: {}, final_list_time: {}, ineq_list_time: {}, list_len: {} eq_ineq_list_len: {}'.format(load_time, final_list_time, ineq_list_time, final_list_len, len(eq_list) + len(ineq_list))
 
         if eq_mat.shape[0] > 0:
             eq_mat = torch.from_numpy(eq_mat).contiguous().float()
