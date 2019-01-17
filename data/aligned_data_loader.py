@@ -8,7 +8,36 @@ from builtins import object
 import sys
 import h5py
 
-NUM_WORKERS=2
+from torch.utils.data.dataloader import default_collate, container_abcs, string_classes, int_classes
+
+NUM_WORKERS = 8
+
+
+def my_collate(batch, field_skip = ['eq_mat','ineq_mat']):
+    # Treat the data in field_skip fields as special (don't concat, just keep the tensors as a list).  This lets us handle eq_mat and ineq_mat in the data loader which should allow for a speedup.
+    r"""Puts each data field into a tensor with outer dimension batch size"""
+
+    elem_type = type(batch[0])
+    #print elem_type
+    if isinstance(batch[0], torch.Tensor):
+        return default_collate(batch)
+    elif elem_type.__module__ == 'numpy' and elem_type.__name__ != 'str_' \
+            and elem_type.__name__ != 'string_':
+        return default_collate(batch)
+    elif isinstance(batch[0], int_classes):
+        return torch.LongTensor(batch)
+    elif isinstance(batch[0], float):
+        return torch.DoubleTensor(batch)
+    elif isinstance(batch[0], string_classes):
+        return batch
+    elif isinstance(batch[0], container_abcs.Mapping):
+        return {key: default_collate([d[key] for d in batch]) if not (key in field_skip) else [d[key] for d in batch] for key in batch[0]}
+    elif isinstance(batch[0], container_abcs.Sequence):
+        transposed = zip(*batch)
+        return [my_collate(samples) for samples in transposed]
+    else:
+        default_collate(batch)
+
 
 class IIWTestData(object):
     def __init__(self, data_loader):
@@ -73,7 +102,7 @@ class SAWData(object):
         N = torch.from_numpy(N)
 
         hdf5_file_sparse.close()
-        return S, B_arr, N 
+        return S, B_arr, N
 
 
     def __next__(self):
@@ -81,7 +110,7 @@ class SAWData(object):
         final_img, target_1, sparse_path_1s = next(self.data_loader_iter)
 
         target_1['SS'] = []
-        target_1['SB_list'] = [] 
+        target_1['SB_list'] = []
         target_1['SN'] = []
 
         SS_1, SB_list_1, SN_1  = self.sparse_loader(sparse_path_1s[0], 2)
@@ -103,6 +132,8 @@ class CGIntrinsicsData(object):
         self.root = root
         # st()
         self.npixels = (256 * 256* 29)
+        self.sparse = None
+        self.sparse_path = ''
 
     def __iter__(self):
         self.data_loader_iter = iter(self.data_loader)
@@ -149,103 +180,25 @@ class CGIntrinsicsData(object):
         N = torch.from_numpy(N)
 
         hdf5_file_sparse.close()
-        return S, B_arr, N 
-
-
-    def create_CGIntrinsics_pair(self, path, gt_albedo, random_filp):
-
-        super_pixel_path = self.root + "/CGIntrinsics/intrinsics_final/superpixels/" + path + ".mat"
-        super_pixel_mat = sio.loadmat(super_pixel_path)
-        super_pixel_mat = super_pixel_mat['data']
-        
-        final_list = []
-
-        for i in range(len(super_pixel_mat)):
-            pos =super_pixel_mat[i][0]
-
-            if pos.shape[0] < 2:
-                continue
-
-            rad_idx = random.randint(0, pos.shape[0]-1)            
-            final_list.append( (pos[rad_idx,0], pos[rad_idx,1]) )
-
-        eq_list = []
-        ineq_list = []
-
-        row = gt_albedo.shape[0]
-        col = gt_albedo.shape[1]
-
-        for i in range(0,len(final_list)-1):
-            for j in range(i+1, len(final_list)):
-                y_1, x_1 = final_list[i]
-                y_2, x_2 = final_list[j]
-
-                y_1 = int(y_1*row)
-                x_1 = int(x_1*col)
-                y_2 = int(y_2*row)
-                x_2 = int(x_2*col)
-
-                # if image is flip
-                if random_filp:
-                    x_1 = col - 1 - x_1
-                    x_2 = col - 1 - x_2
-
-                if gt_albedo[y_1, x_1] < 2e-4 or gt_albedo[y_2, x_2] < 2e-4:
-                    continue
-
-                ratio = gt_albedo[y_1, x_1]/gt_albedo[y_2, x_2]
-
-                if ratio < 1.05 and ratio > 1./1.05:
-                    eq_list.append([y_1, x_1, y_2, x_2])
-                elif ratio > 1.5:
-                    ineq_list.append([y_1, x_1, y_2, x_2])               
-                elif ratio < 1./1.5:
-                    ineq_list.append([y_2, x_2, y_1, x_1])               
-
-        eq_mat = np.asarray(eq_list)
-        ineq_mat = np.asarray(ineq_list)
-
-        if eq_mat.shape[0] > 0:
-            eq_mat = torch.from_numpy(eq_mat).contiguous().float()
-        else:
-            eq_mat = torch.Tensor(1,1)
-
-
-        if ineq_mat.shape[0] > 0:
-            ineq_mat = torch.from_numpy(ineq_mat).contiguous().float()
-        else:
-            ineq_mat = torch.Tensor(1,1)
-
-
-        return eq_mat, ineq_mat
-
+        return S, B_arr, N
 
     def __next__(self):
         self.iter += 1
         self.iter += 1
-        scale =4 
+        scale = 4
 
         final_img, target_1, sparse_path_1s = next(self.data_loader_iter)
 
-        target_1['eq_mat'] = []
-        target_1['ineq_mat'] = []
-
-        # This part will make training much slower, but it will improve performance
-        for i in range(len(target_1["CGIntrinsics_ordinal_path"])):
-            mat_path = target_1["CGIntrinsics_ordinal_path"][i]
-            gt_R = target_1['gt_R'][i,0,:,:].numpy()
-            random_filp = target_1['random_filp'][i]
-
-            eq_mat, ineq_mat = self.create_CGIntrinsics_pair(mat_path, gt_R, random_filp)
-            target_1['eq_mat'].append(eq_mat)
-            target_1['ineq_mat'].append(ineq_mat)
-
-
+        # This is all just precomputed stuff that is the same for every image.
         target_1['SS'] = []
-        target_1['SB_list'] = [] 
+        target_1['SB_list'] = []
         target_1['SN'] = []
 
-        SS_1, SB_list_1, SN_1  = self.sparse_loader(sparse_path_1s[0], 2)
+        if self.sparse_path != sparse_path_1s[0]:
+            self.sparse = self.sparse_loader(sparse_path_1s[0], 2)
+            self.sparse_path = sparse_path_1s[0]
+
+        SS_1, SB_list_1, SN_1 = self.sparse
 
         for i in range(len(sparse_path_1s)):
             target_1['SS'].append(SS_1)
@@ -264,6 +217,8 @@ class IIWData(object):
         self.flip = flip
         # st()
         self.npixels = (256 * 256* 29)
+        self.sparse = None
+        self.sparse_path = ''
 
     def __iter__(self):
         self.data_loader_iter = iter(self.data_loader)
@@ -310,62 +265,26 @@ class IIWData(object):
         N = torch.from_numpy(N)
 
         hdf5_file_sparse.close()
-        return S, B_arr, N 
+        return S, B_arr, N
 
-    def long_range_loader(self, h5_path):
-        hdf5_file_read_img = h5py.File(h5_path,'r')        
-        num_eq = hdf5_file_read_img.get('/info/num_eq')
-        num_eq = np.float32(np.array(num_eq))
-        num_eq = int(num_eq[0][0])
-
-
-        if num_eq > 0:
-            equal_mat = hdf5_file_read_img.get('/info/equal')
-            equal_mat = np.float32(np.array(equal_mat))
-            equal_mat = np.transpose(equal_mat, (1, 0))
-            equal_mat = torch.from_numpy(equal_mat).contiguous().float()
-        else:
-            equal_mat = torch.Tensor(1,1)
- 
-        num_ineq = hdf5_file_read_img.get('/info/num_ineq')
-        num_ineq = np.float32(np.array(num_ineq))
-        num_ineq = int(num_ineq[0][0])
-
-        if num_ineq > 0:
-            ineq_mat = hdf5_file_read_img.get('/info/inequal')
-            ineq_mat = np.float32(np.array(ineq_mat))
-            ineq_mat = np.transpose(ineq_mat, (1, 0))
-            ineq_mat = torch.from_numpy(ineq_mat).contiguous().float()
-        else:
-            ineq_mat = torch.Tensor(1,1)
-
-
-        hdf5_file_read_img.close()
-
-        return equal_mat, ineq_mat
 
     def __next__(self):
         self.iter += 1
         self.iter += 1
-        scale =4 
+        scale = 4
 
         final_img, target_1, sparse_path_1s = next(self.data_loader_iter)
 
-        target_1['eq_mat'] = []
-        target_1['ineq_mat'] = []
-
-        for i in range(len(target_1["mat_path"])):
-            mat_path = target_1["mat_path"][i]
-            eq_mat, ineq_mat = self.long_range_loader(mat_path)
-            target_1['eq_mat'].append(eq_mat)
-            target_1['ineq_mat'].append(ineq_mat)
-
-
+        # This is all just precomputed stuff that is the same for every image.
         target_1['SS'] = []
-        target_1['SB_list'] = [] 
+        target_1['SB_list'] = []
         target_1['SN'] = []
 
-        SS_1, SB_list_1, SN_1  = self.sparse_loader(sparse_path_1s[0], 2)
+        if self.sparse_path != sparse_path_1s[0]:
+            self.sparse = self.sparse_loader(sparse_path_1s[0], 2)
+            self.sparse_path = sparse_path_1s[0]
+
+        SS_1, SB_list_1, SN_1 = self.sparse
 
         for i in range(len(sparse_path_1s)):
             target_1['SS'].append(SS_1)
@@ -380,7 +299,7 @@ class CGIntrinsics_TEST_DataLoader(BaseDataLoader):
         dataset = CGIntrinsicsImageFolder(root=_root, \
                 list_dir =_list_dir)
 
-        self.data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= False, num_workers=int(NUM_WORKERS))
+        self.data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= False, num_workers=int(NUM_WORKERS), collate_fn=my_collate)
         self.dataset = dataset
         flip = False
         self.paired_data = CGIntrinsicsData(self.data_loader, _root)
@@ -400,9 +319,9 @@ class CGIntrinsics_DataLoader(BaseDataLoader):
         dataset = CGIntrinsicsImageFolder(root=_root, \
                 list_dir =_list_dir)
 
-        self.data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= True, num_workers=int(NUM_WORKERS))
+        self.data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= True, num_workers=int(NUM_WORKERS), collate_fn=my_collate)
         self.dataset = dataset
-        flip = False    
+        flip = False
         self.paired_data = CGIntrinsicsData(self.data_loader, _root)
 
     def name(self):
@@ -422,7 +341,7 @@ class SAWDataLoader(BaseDataLoader):
         # self.fineSize = opt.fineSize
 
         transform = None
- 
+
         dataset = SAW_ImageFolder(root=_root, \
                 list_dir =_list_dir, mode = mode, is_flip = True, transform=transform)
 
@@ -443,7 +362,8 @@ class SAWDataLoader(BaseDataLoader):
 
 
 class IIWDataLoader(BaseDataLoader):
-    def __init__(self,_root, _list_dir, mode, batch_size=16):
+    def __init__(self,_root, _list_dir, mode, batch_size=16, is_train=True):
+        # is_train lets us use the same dataloader for train and validation
         # BaseDataLoader.initialize(self)
         # self.fineSize = opt.fineSize
 
@@ -458,11 +378,12 @@ class IIWDataLoader(BaseDataLoader):
         # Dataset A
         # dataset = ImageFolder(root='/phoenix/S6/zl548/AMOS/test/', \
                 # list_dir = '/phoenix/S6/zl548/AMOS/test/list/',transform=transform)
-        # testset 
+        # testset
         dataset = IIW_ImageFolder(root=_root, \
-                    list_dir =_list_dir, mode = mode, is_flip = True, transform=transform)
+                    list_dir =_list_dir, mode = mode, is_flip = is_train, transform=transform)
 
-        data_loader = torch.utils.data.DataLoader(dataset, batch_size= batch_size, shuffle= True, num_workers=int(NUM_WORKERS))
+        # Have to use 2 or fewer workers for IIW due to having a number of files open during reading.
+        data_loader = torch.utils.data.DataLoader(dataset, batch_size= batch_size, shuffle = is_train, num_workers=min(int(2), int(NUM_WORKERS)), collate_fn = my_collate)
 
         self.dataset = dataset
         flip = False
@@ -498,37 +419,14 @@ class RenderDataLoader(BaseDataLoader):
     def __len__(self):
         return len(self.dataset)
 
-# IIWVal and IIWTest are the same except that IIWVal uses all of the additional long-range annotations rather than just the initial dataset.
-class IIWValDataLoader(BaseDataLoader):
-    def __init__(self,_root, _list_dir, mode, batch_size=16):
-
-        transform = None
-        dataset = IIW_ImageFolder(root=_root, \
-                list_dir =_list_dir, mode= mode, is_flip = False, transform=transform)
-
-        data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= False, num_workers=int(NUM_WORKERS))
-        self.dataset = dataset
-        self.iiw_data = IIWData(data_loader, False)
-
-    def name(self):
-        return 'IIWValDataLoader'
-
-    def load_data(self):
-        return self.iiw_data
-
-    def __len__(self):
-        return len(self.dataset)
-
-
-
 class IIWTESTDataLoader(BaseDataLoader):
     def __init__(self,_root, _list_dir, mode, batch_size=16):
 
         transform = None
         dataset = IIW_ImageFolder(root=_root, \
-                list_dir =_list_dir, mode= mode, is_flip = False, transform=transform)
+                list_dir =_list_dir, mode= mode, is_flip = False, transform=transform, load_long_range_annotes=False)
 
-        data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= False, num_workers=int(NUM_WORKERS))
+        data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle= False, num_workers=int(NUM_WORKERS), collate_fn = my_collate)
         self.dataset = dataset
         self.iiw_data = IIWTestData(data_loader)
 

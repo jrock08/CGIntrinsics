@@ -5,7 +5,7 @@ import PIL
 import numpy as np
 import torch
 import string
-from scipy import misc 
+from scipy import misc
 import os
 import os.path
 import sys
@@ -22,7 +22,7 @@ from skimage.morphology import square
 from skimage.restoration import denoise_tv_chambolle
 from PIL import Image
 from scipy.ndimage.measurements import label
-
+import scipy.io as sio
 
 def make_dataset(list_dir):
     file_name = list_dir + "img_batch.p"
@@ -62,7 +62,7 @@ def rgb_to_chromaticity(rgb):
 
 class CGIntrinsicsImageFolder(data.Dataset):
 
-    def __init__(self, root, list_dir, transform=None, 
+    def __init__(self, root, list_dir, transform=None,
                  loader=None):
         # load image list from hdf5
         img_list = make_dataset(list_dir)
@@ -92,6 +92,7 @@ class CGIntrinsicsImageFolder(data.Dataset):
             line = line.split()
             self.stat_dict[line[0]] = float(line[2])
             line = f.readline()
+        f.close()
 
     def DA(self, img, mode, random_pos, random_filp):
 
@@ -122,13 +123,16 @@ class CGIntrinsicsImageFolder(data.Dataset):
         for k in range(0, self.half_window*2+1):
             for l in range(0,self.half_window*2+1):
                 sub_C[ct_idx,:,:,:] = C[self.half_window + self.Y[k,l]:h- self.half_window + self.Y[k,l], \
-                self.half_window + self.X[k,l]: w-self.half_window + self.X[k,l] , :] 
+                self.half_window + self.X[k,l]: w-self.half_window + self.X[k,l] , :]
                 ct_idx += 1
 
         return sub_C
 
     def load_CGIntrinsics(self, path):
+        import time
+        st_total = time.time()
 
+        st = time.time()
         img_path = self.root + "/CGIntrinsics/intrinsics_final/images/" + path
         srgb_img = np.float32(io.imread(img_path))/ 255.0
         file_name = path.split('/')
@@ -138,37 +142,48 @@ class CGIntrinsicsImageFolder(data.Dataset):
 
         mask_path = self.root + "/CGIntrinsics/intrinsics_final/images/" + file_name[0] + "/" + file_name[1][:-4] + "_mask.png"
         mask = np.float32(io.imread(mask_path))/ 255.0
-        
-        gt_R_gray = np.mean(gt_R, 2)
-        mask[gt_R_gray < 1e-6] = 0 
-        mask[np.mean(srgb_img,2) < 1e-6] = 0 
+        en = time.time()
+        im_load_time = en-st
 
+        gt_R_gray = np.mean(gt_R, 2)
+        mask[gt_R_gray < 1e-6] = 0
+        mask[np.mean(srgb_img,2) < 1e-6] = 0
+
+        st = time.time()
         mask = skimage.morphology.binary_erosion(mask, square(11))
         mask = np.expand_dims(mask, axis = 2)
         mask = np.repeat(mask, 3, axis= 2)
         gt_R[gt_R <1e-6] = 1e-6
+        en = time.time()
+        morph_time = en-st
+
 
         # do normal DA
         # random_angle = random.random() * self.rotation_range * 2.0 - self.rotation_range # random angle between -5 --- 5 degree
         random_filp = random.random()
-        random_start_y = random.randint(0, 9) 
-        random_start_x = random.randint(0, 9) 
+        random_start_y = random.randint(0, 9)
+        random_start_x = random.randint(0, 9)
 
         random_pos = [random_start_y, random_start_y + self.original_h - 10, random_start_x, random_start_x + self.original_w - 10]
-
+        st = time.time()
         srgb_img = self.DA(srgb_img, 1, random_pos, random_filp)
         gt_R = self.DA(gt_R, 1,  random_pos, random_filp)
         # cam_normal = self.DA(cam_normal, 0,  random_pos, random_filp)
         mask = self.DA(mask, 0,  random_pos, random_filp)
         rgb_img = srgb_img**2.2
         gt_S = rgb_img / gt_R
+        en = time.time()
+        DA_time = en - st
 
+        st = time.time()
         search_name = path[:-4] + ".rgbe"
         irridiance = self.stat_dict[search_name]
 
         if irridiance < 0.25:
-            srgb_img = denoise_tv_chambolle(srgb_img, weight=0.05, multichannel=True)            
+            srgb_img = denoise_tv_chambolle(srgb_img, weight=0.05, multichannel=True)
             gt_S = denoise_tv_chambolle(gt_S, weight=0.1, multichannel=True)
+        en = time.time()
+        irridiance_time = en-st
 
         mask[gt_S > 10] = 0
         gt_S[gt_S > 20] = 20
@@ -185,10 +200,79 @@ class CGIntrinsicsImageFolder(data.Dataset):
         gt_S = np.mean(gt_S, 2)
         gt_S = np.expand_dims(gt_S, axis = 2)
 
-        gt_R = np.mean(gt_R,2)
+        gt_R = np.mean(gt_R, 2)
         gt_R = np.expand_dims(gt_R, axis = 2)
+        en_total = time.time()
+        #print '{}: im_load: {} morph: {} DA: {} irridiance: {} total: {}'.format(path, im_load_time, morph_time, DA_time, irridiance_time, en_total - st_total)
 
         return srgb_img, gt_R, gt_S, mask, random_filp
+
+    def CGIntrinsics_pair(self, path, gt_albedo, random_filp):
+        super_pixel_path = self.root + "/CGIntrinsics/intrinsics_final/superpixels/" + path + ".mat"
+        super_pixel_mat = sio.loadmat(super_pixel_path)
+        super_pixel_mat = super_pixel_mat['data']
+
+        final_list = []
+
+        for i in range(len(super_pixel_mat)):
+            pos =super_pixel_mat[i][0]
+
+            if pos.shape[0] < 2:
+                continue
+
+            rad_idx = random.randint(0, pos.shape[0]-1)
+            final_list.append( (pos[rad_idx,0], pos[rad_idx,1]) )
+
+        eq_list = []
+        ineq_list = []
+
+        row = gt_albedo.shape[0]
+        col = gt_albedo.shape[1]
+
+        for i in range(0,len(final_list)-1):
+            for j in range(i+1, len(final_list)):
+                y_1, x_1 = final_list[i]
+                y_2, x_2 = final_list[j]
+
+                y_1 = int(y_1*row)
+                x_1 = int(x_1*col)
+                y_2 = int(y_2*row)
+                x_2 = int(x_2*col)
+
+                # if image is flip
+                if random_filp:
+                    x_1 = col - 1 - x_1
+                    x_2 = col - 1 - x_2
+
+                if gt_albedo[y_1, x_1] < 2e-4 or gt_albedo[y_2, x_2] < 2e-4:
+                    continue
+
+                ratio = gt_albedo[y_1, x_1]/gt_albedo[y_2, x_2]
+
+                if ratio < 1.05 and ratio > 1./1.05:
+                    eq_list.append([y_1, x_1, y_2, x_2])
+                elif ratio > 1.5:
+                    ineq_list.append([y_1, x_1, y_2, x_2])
+                elif ratio < 1./1.5:
+                    ineq_list.append([y_2, x_2, y_1, x_1])
+
+        eq_mat = np.asarray(eq_list)
+        ineq_mat = np.asarray(ineq_list)
+
+        if eq_mat.shape[0] > 0:
+            eq_mat = torch.from_numpy(eq_mat).contiguous().float()
+        else:
+            eq_mat = torch.Tensor(1,1)
+
+
+        if ineq_mat.shape[0] > 0:
+            ineq_mat = torch.from_numpy(ineq_mat).contiguous().float()
+        else:
+            ineq_mat = torch.Tensor(1,1)
+
+
+        return eq_mat, ineq_mat
+
 
     def __getitem__(self, index):
         targets_1 = {}
@@ -208,12 +292,16 @@ class CGIntrinsicsImageFolder(data.Dataset):
 
         targets_1["rgb_img"] = torch.from_numpy(np.transpose(rgb_img, (2,0,1))).contiguous().float()
         final_img = torch.from_numpy(np.transpose(srgb_img, (2, 0, 1))).contiguous().float()
-        targets_1['mask'] = torch.from_numpy( np.transpose(mask, (2 , 0 ,1))).contiguous().float()
+        targets_1['mask'] = torch.from_numpy(np.transpose(mask, (2 , 0 ,1))).contiguous().float()
         targets_1['gt_R'] = torch.from_numpy(np.transpose(gt_R, (2 , 0 ,1))).contiguous().float()
         targets_1['gt_S'] = torch.from_numpy(np.transpose(gt_S, (2 , 0 ,1))).contiguous().float()
         targets_1['path'] = full_path
 
         sparse_path_1s = self.root + "/CGIntrinsics/intrinsics_final/sparse_hdf5_S/384x512/R0.h5"
+
+        eq_mat, ineq_mat = self.CGIntrinsics_pair(targets_1['CGIntrinsics_ordinal_path'], targets_1['gt_R'][0,:,:], targets_1['random_filp'])
+        targets_1['eq_mat'] = eq_mat
+        targets_1['ineq_mat'] = ineq_mat
 
         return final_img, targets_1, sparse_path_1s
 
@@ -222,7 +310,7 @@ class CGIntrinsicsImageFolder(data.Dataset):
 
 
 class Render_ImageFolder(data.Dataset):
-    def __init__(self, root, list_dir, transform=None, 
+    def __init__(self, root, list_dir, transform=None,
                  loader=None):
         # load image list from hdf5
         img_list = make_dataset(list_dir)
@@ -276,7 +364,7 @@ class Render_ImageFolder(data.Dataset):
         for k in range(0, self.half_window*2+1):
             for l in range(0,self.half_window*2+1):
                 sub_C[ct_idx,:,:,:] = C[self.half_window + self.Y[k,l]:h- self.half_window + self.Y[k,l], \
-                self.half_window + self.X[k,l]: w-self.half_window + self.X[k,l] , :] 
+                self.half_window + self.X[k,l]: w-self.half_window + self.X[k,l] , :]
                 ct_idx += 1
 
         return sub_C
@@ -305,13 +393,13 @@ class Render_ImageFolder(data.Dataset):
 
         mask_path = self.root + "/CGIntrinsics/intrinsics_final/rendered/mask/" + path[:-4].split('_')[0] + "_alpha.png"
         mask = np.float32(io.imread(mask_path))/ 255.0
-        
+
         if mask.shape[2] == 4:
             print("=================mask_path ", img_path)
             mask = mask[:,:,0:3]
 
         mask = np.mean(mask, 2)
-        mask[mask < 0.99] = 0 
+        mask[mask < 0.99] = 0
         mask = skimage.morphology.erosion(mask, square(7))
         mask = np.expand_dims(mask, axis = 2)
         mask = np.repeat(mask, 3, axis= 2)
@@ -319,8 +407,8 @@ class Render_ImageFolder(data.Dataset):
         # do normal DA
         # random_angle = random.random() * self.rotation_range * 2.0 - self.rotation_range # random angle between -5 --- 5 degree
         random_filp = random.random()
-        random_start_y = random.randint(0, 19) 
-        random_start_x = random.randint(0, 19) 
+        random_start_y = random.randint(0, 19)
+        random_start_x = random.randint(0, 19)
         random_pos = [random_start_y, random_start_y + srgb_img.shape[0] - 20, random_start_x, random_start_x + srgb_img.shape[1] - 20]
 
         ratio = float(srgb_img.shape[0])/float(srgb_img.shape[1])
@@ -344,10 +432,10 @@ class Render_ImageFolder(data.Dataset):
         gt_R = self.DA(gt_R, 1,  random_pos, random_filp, h, w)
         # cam_normal = self.DA(cam_normal, 0,  random_pos, random_filp)
         mask = self.DA(mask, 0,  random_pos, random_filp, h, w)
-        
+
         rgb_img = srgb_img**2.2
 
-        gt_S = rgb_img / gt_R        
+        gt_S = rgb_img / gt_R
 
         mask[gt_S > 20] = 0
         gt_S[gt_S > 20] = 20
@@ -396,8 +484,8 @@ class Render_ImageFolder(data.Dataset):
 
 class IIW_ImageFolder(data.Dataset):
 
-    def __init__(self, root, list_dir, mode, is_flip, transform=None, 
-                 loader=None):
+    def __init__(self, root, list_dir, mode, is_flip, transform=None,
+                 loader=None, load_long_range_annotes = True):
         # load image list from hdf5
         img_list = make_dataset(list_dir)
         if len(img_list) == 0:
@@ -405,7 +493,7 @@ class IIW_ImageFolder(data.Dataset):
                                "Supported image extensions are: " + ",".join(IMG_EXTENSIONS)))
         self.root = root
         self.list_dir = list_dir
-        self.is_flip = is_flip    
+        self.is_flip = is_flip
         self.img_list = img_list
         # self.targets_list = targets_list
         # self.img_list_2 = img_list_2
@@ -420,6 +508,7 @@ class IIW_ImageFolder(data.Dataset):
         x = np.arange(-1, 2)
         y = np.arange(-1, 2)
         self.X, self.Y = np.meshgrid(x, y)
+        self.load_long_range_annotes = load_long_range_annotes
 
     def set_o_idx(self, o_idx):
         self.current_o_idx = o_idx
@@ -451,25 +540,7 @@ class IIW_ImageFolder(data.Dataset):
 
         return img
 
-    # def iiw_loader(self, img_path):
-    #     # img = np.float32(io.imread(img_path))/ 255.0
-
-    #     hdf5_file_read_img = h5py.File(img_path,'r')
-    #     img = hdf5_file_read_img.get('/iiw/img')
-    #     img = np.float32(np.array(img))
-
-    #     img = np.transpose(img, (2,1, 0))
-    #     hdf5_file_read_img.close()
-
-    #     random_filp = random.random()
-
-    #     if self.is_flip and random_filp > 0.5:
-    #         img = np.fliplr(img)
-
-    #     return img, random_filp
-
     def iiw_loader(self, img_path):
-        
         img_path = img_path[-1][:-3]
         img_path = self.root + "CGIntrinsics/IIW/data/" + img_path
         img = np.float32(io.imread(img_path))/ 255.0
@@ -503,10 +574,42 @@ class IIW_ImageFolder(data.Dataset):
         for k in range(0, self.half_window*2+1):
             for l in range(0,self.half_window*2+1):
                 sub_C[ct_idx,:,:,:] = C[self.half_window + self.Y[k,l]:h- self.half_window + self.Y[k,l], \
-                self.half_window + self.X[k,l]: w-self.half_window + self.X[k,l] , :] 
+                self.half_window + self.X[k,l]: w-self.half_window + self.X[k,l] , :]
                 ct_idx += 1
 
         return sub_C
+
+    def long_range_loader(self, h5_path):
+        hdf5_file_read_img = h5py.File(h5_path,'r')
+        num_eq = hdf5_file_read_img.get('/info/num_eq')
+        num_eq = np.float32(np.array(num_eq))
+        num_eq = int(num_eq[0][0])
+
+
+        if num_eq > 0:
+            equal_mat = hdf5_file_read_img.get('/info/equal')
+            equal_mat = np.float32(np.array(equal_mat))
+            equal_mat = np.transpose(equal_mat, (1, 0))
+            equal_mat = torch.from_numpy(equal_mat).contiguous().float()
+        else:
+            equal_mat = torch.Tensor(1,1)
+
+        num_ineq = hdf5_file_read_img.get('/info/num_ineq')
+        num_ineq = np.float32(np.array(num_ineq))
+        num_ineq = int(num_ineq[0][0])
+
+        if num_ineq > 0:
+            ineq_mat = hdf5_file_read_img.get('/info/inequal')
+            ineq_mat = np.float32(np.array(ineq_mat))
+            ineq_mat = np.transpose(ineq_mat, (1, 0))
+            ineq_mat = torch.from_numpy(ineq_mat).contiguous().float()
+        else:
+            ineq_mat = torch.Tensor(1,1)
+
+
+        hdf5_file_read_img.close()
+
+        return equal_mat, ineq_mat
 
 
     def __getitem__(self, index):
@@ -523,7 +626,7 @@ class IIW_ImageFolder(data.Dataset):
         # img, random_filp = self.iiw_loader(img_path)
         srgb_img, random_filp, oringinal_shape = self.iiw_loader(self.img_list[self.current_o_idx][index].split('/'))
 
-        targets_1['path'] = "/" + img_path.split('/')[-1] 
+        targets_1['path'] = "/" + img_path.split('/')[-1]
         targets_1["judgements_path"] = judgement_path
         targets_1["random_filp"] = random_filp > 0.5
         targets_1["oringinal_shape"] = oringinal_shape
@@ -547,8 +650,12 @@ class IIW_ImageFolder(data.Dataset):
             rgb_img = rgb_img[::2,::2,:]
 
 
-
         final_img = torch.from_numpy(np.ascontiguousarray(np.transpose(srgb_img, (2,0,1)))).contiguous().float()
+
+        if self.load_long_range_annotes:
+            eq_mat, ineq_mat = self.long_range_loader(targets_1['mat_path'])
+            targets_1['eq_mat'] = eq_mat
+            targets_1['ineq_mat'] = ineq_mat
 
         sparse_shading_name = str(self.height) + "x" + str(self.width)
 
@@ -573,7 +680,7 @@ class IIW_ImageFolder(data.Dataset):
 
 class SAW_ImageFolder(data.Dataset):
 
-    def __init__(self, root, list_dir, mode, is_flip, transform=None, 
+    def __init__(self, root, list_dir, mode, is_flip, transform=None,
                  loader=None):
         # load image list from hdf5
         img_list = make_dataset(list_dir)
@@ -582,7 +689,7 @@ class SAW_ImageFolder(data.Dataset):
                                "Supported image extensions are: " + ",".join(IMG_EXTENSIONS)))
         self.root = root
         self.list_dir = list_dir
-        self.is_flip = is_flip    
+        self.is_flip = is_flip
         self.img_list = img_list
         # self.targets_list = targets_list
         # self.img_list_2 = img_list_2
@@ -668,7 +775,7 @@ class SAW_ImageFolder(data.Dataset):
         for k in range(0, self.half_window*2+1):
             for l in range(0,self.half_window*2+1):
                 sub_C[ct_idx,:,:,:] = C[self.half_window + self.Y[k,l]:h- self.half_window + self.Y[k,l], \
-                self.half_window + self.X[k,l]: w-self.half_window + self.X[k,l] , :] 
+                self.half_window + self.X[k,l]: w-self.half_window + self.X[k,l] , :]
                 ct_idx += 1
 
         return sub_C
@@ -700,8 +807,8 @@ class SAW_ImageFolder(data.Dataset):
         original_w = srgb_img.shape[1]
 
         random_filp = random.random()
-        random_start_y = random.randint(0, 9) 
-        random_start_x = random.randint(0, 9) 
+        random_start_y = random.randint(0, 9)
+        random_start_x = random.randint(0, 9)
         random_pos = [random_start_y, random_start_y + original_h - 10, random_start_x, random_start_x + original_w - 10]
 
         srgb_img = self.DA(srgb_img, 1, random_pos, random_filp)

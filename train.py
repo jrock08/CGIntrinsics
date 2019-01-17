@@ -18,13 +18,16 @@ from models.models import create_model
 import torch
 import math
 
-DEBUG = False
-batch_size = 6*4
+opt = TrainOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
+
+DEBUG = opt.debug
+batch_size = 6*len(opt.gpu_ids)
+print 'batch_size: {}'.format(batch_size)
+#batch_size = 4
 train_on_IIW = True
 train_on_SAW = False
 
 
-opt = TrainOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
 #root = "/home/zl548/phoenix24/"
 full_root = '/data/jrock/IIW_2019/'
 
@@ -34,9 +37,15 @@ dataset_CGIntrinsics = data_loader_S.load_data()
 dataset_size_CGIntrinsics = len(data_loader_S)
 
 val_list_CGIntrinsics = full_root + '/CGIntrinsics/intrinsics_final/train_val_list/val_list/'
-data_loader_val_CGI = CreateDataLoaderCGIntrinsicsTest(full_root, train_list_CGIntrinsics, batch_size)
+data_loader_val_CGI = CreateDataLoaderCGIntrinsicsTest(full_root, val_list_CGIntrinsics, batch_size)
 dataset_val_CGIntrinsics = data_loader_val_CGI.load_data()
 dataset_val_size_CGIntrinsics = len(data_loader_val_CGI)
+
+#for j in range(len(data_loader_val_CGI.dataset)):
+#    st = time.time()
+#    d = data_loader_val_CGI.dataset[j]
+#    en = time.time()
+#    print '{}: time {}'.format(j,en-st)
 
 # TODO: This data has some issues that still need to be figured out.
 #train_list_Render = full_root + '/CGIntrinsics/intrinsics_final/render_list/'
@@ -95,6 +104,23 @@ count_saw = 0
 count_iiw = 0
 num_orientation = 5
 
+import time
+print 'checking how long it takes to load data'
+st = time.time()
+for j, data_val in enumerate(dataset_val_CGIntrinsics):
+    print j
+    if DEBUG and j >= 4:
+        break
+en = time.time()
+print 'loading CGIntrinsics data takes {}'.format((en-st) / j)
+
+st = time.time()
+for j, data_val in enumerate(dataset_val_IIW):
+    print j
+    if DEBUG and j >= 4:
+        break
+en = time.time()
+print 'loading IIW data takes {} time'.format((en-st) / j)
 
 for epoch in range(0, 50):
     if epoch > 0 and epoch % 16 ==0:

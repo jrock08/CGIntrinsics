@@ -39,8 +39,8 @@ def CreateDataLoaderRender(_root, _list_dir, batch_size=16):
 
 def CreateDataLoaderIIWVal(_root, _list_dir, mode, batch_size=16):
     data_loader = None
-    from data.aligned_data_loader import IIWValDataLoader
-    data_loader = IIWValDataLoader(_root, _list_dir, mode, batch_size)
+    from data.aligned_data_loader import IIWDataLoader
+    data_loader = IIWDataLoader(_root, _list_dir, mode, batch_size, is_train=False)
 
     return data_loader
 
