@@ -2,7 +2,7 @@ import argparse
 import os
 from util import util
 
-class BaseOptions():
+class BaseOptions(object):
     def __init__(self):
         self.parser = argparse.ArgumentParser()
         self.initialized = False
@@ -22,6 +22,7 @@ class BaseOptions():
         # self.parser.add_argument('--n_layers_D', type=int, default=3, help='only used if which_model_netD==n_layers')
         self.parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2')
         self.parser.add_argument('--name', type=str, default='test_local', help='name of the experiment. It decides where to store samples and models')
+        self.parser.add_argument('--sub_name', type=str, default='', help='second name for the experiment, determines the model name')
         # self.parser.add_argument('--align_data', action='store_true',
                                 # help='if True, the datasets are loaded from "test" and "train" directories and the data pairs are aligned')
         self.parser.add_argument('--model', type=str, default='pix2pix',
@@ -36,6 +37,8 @@ class BaseOptions():
         self.parser.add_argument('--identity', type=float, default=0.0, help='use identity mapping. Setting identity other than 1 has an effect of scaling the weight of the identity mapping loss. For example, if the weight of the identity loss should be 10 times smaller than the weight of the reconstruction loss, please set optidentity = 0.1')
         self.parser.add_argument('--use_dropout', action='store_true', help='use dropout for the generator')
         self.parser.add_argument('--max_dataset_size', type=int, default=float("inf"), help='Maximum number of samples allowed per dataset. If the dataset directory contains more than max_dataset_size, only a subset is loaded.')
+
+        self.parser.add_argument('--human_judgement_gray', action='store_true', help='treat the physical and human judgement as two different projections of the true RGB reflectance image, rather than the same grayscale image')
 
         self.initialized = True
 
@@ -59,13 +62,4 @@ class BaseOptions():
             print('%s: %s' % (str(k), str(v)))
         print('-------------- End ----------------')
 
-        # save to the disk
-        expr_dir =  os.path.join(self.opt.checkpoints_dir, self.opt.name)
-        util.mkdirs(expr_dir)
-        file_name = os.path.join(expr_dir, 'opt.txt')
-        with open(file_name, 'wt') as opt_file:
-            opt_file.write('------------ Options -------------\n')
-            for k, v in sorted(args.items()):
-                opt_file.write('%s: %s\n' % (str(k), str(v)))
-            opt_file.write('-------------- End ----------------\n')
         return self.opt

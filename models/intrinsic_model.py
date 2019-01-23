@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import skimage
 from scipy.ndimage.measurements import label
 from skimage.transform import resize
+import itertools
 
 
 def weights_init(m):
@@ -26,6 +27,10 @@ def weights_init(m):
     elif classname.find('BatchNorm2d') != -1:
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
+
+class WrapperModel(nn.Module):
+    def __init__(self):
+        super(WrapperModel, self).__init__()
 
 class Intrinsics_Model(BaseModel):
     def name(self):
@@ -43,29 +48,39 @@ class Intrinsics_Model(BaseModel):
         # define tensors
         print("LOAD Unet pix2pix version")
         output_nc = 1
-        model = networks.define_G(opt.input_nc, output_nc, opt.ngf, 
+        g_model = networks.define_G(opt.input_nc, output_nc, opt.ngf,
                                         opt.which_model_netG, 'batch', opt.use_dropout, self.gpu_ids)
+        model = WrapperModel()
+        model.g_model = g_model
 
-        # # TESTING
-        if not self.isTrain:
-            model_parameters = self.load_network(model, 'G', 'cgintrinsics_iiw_saw_final')
-            model.load_state_dict(model_parameters)
+        self.human_judgement_gray = opt.human_judgement_gray
+
+        if opt.human_judgement_gray:
+            rgb_to_human_gray = nn.Sequential(nn.Conv2d(3, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 1, kernel_size=1))
+
+            if len(opt.gpu_ids) > 0:
+                rgb_to_human_gray.cuda(opt.gpu_ids[0])
+            model.rgb_to_human_gray = rgb_to_human_gray
 
         self.netG = model
 
-        # model_parameters = self.load_network(self.netG, 'G', '_best_SUNCG_saw_iiw_intrinsics')
-        # self.netG.load_state_dict(model_parameters)            
+        # TESTING
+        if not self.isTrain:
+            # TODO: won't work with the pretrained model anymore
+            model_parameters = self.load_network(model, 'G', opt.which_epoch)
+            model.load_state_dict(model_parameters)
+        else:
+            self.lr = opt.lr
+            self.old_lr = opt.lr
+            self.netG.train()
+            self.optimizer_G = torch.optim.Adam(self.netG.parameters(),
+                                                lr=0.0002, betas=(0.9, 0.999))
 
-        self.lr = opt.lr
-        self.old_lr = opt.lr
-        self.netG.train()
 
-        # if self.isTrain:            
-        self.criterion_joint = networks.JointLoss() 
+        # if self.isTrain:
+        self.criterion_joint = networks.JointLoss()
         # initialize optimizers
-        self.optimizer_G = torch.optim.Adam(self.netG.parameters(),
-                                            lr=0.0002, betas=(0.9, 0.999))
-        
+
         print('---------- Networks initialized -------------')
         networks.print_network(self.netG)
         print('-----------------------------------------------')
@@ -77,8 +92,18 @@ class Intrinsics_Model(BaseModel):
 
 
     def forward_both(self):
-        self.input_images = Variable(self.input.float().cuda(), requires_grad = False)        
-        self.prediction_R, self.prediction_S  = self.netG.forward(self.input_images)
+        self.input_images = Variable(self.input.float().cuda(), requires_grad = False)
+        prediction_R_rgb, self.prediction_S  = self.netG.g_model.forward(self.input_images)
+        self.prediction_R = prediction_R_rgb.mean(1, keepdim=True)
+        if self.human_judgement_gray:
+            if self.gpu_ids and isinstance(prediction_R_rgb, torch.cuda.FloatTensor):
+                self.prediction_R_human = nn.parallel.data_parallel(self.netG.rgb_to_human_gray, prediction_R_rgb, self.gpu_ids)
+            else:
+                self.prediction_R_human = self.rgb_to_human_gray(prediction_R_rgb)
+        else:
+            self.prediction_R_human = self.prediction_R
+
+        #self.prediction_R, self.prediction_S  = self.netG.forward(self.input_images)
 
     #get image paths
     def get_image_paths(self):
@@ -86,7 +111,7 @@ class Intrinsics_Model(BaseModel):
 
     def backward_G(self, epoch, data_set_name):
         # Combined loss
-        self.loss_joint = self.criterion_joint(self.input_images , self.prediction_R, self.prediction_S, 
+        self.loss_joint = self.criterion_joint(self.input_images , self.prediction_R, self.prediction_R_human, self.prediction_S, 
                                                     self.targets, data_set_name, epoch)
         print("training loss is %f"%self.loss_joint)
         self.loss_joint_var = self.criterion_joint.get_loss_var()
@@ -106,15 +131,34 @@ class Intrinsics_Model(BaseModel):
     def validate_intrinsics(self, epoch, data_set_name):
         self.forward_both()
         self.optimizer_G.zero_grad()
-        self.loss_joint = self.criterion_joint(self.input_images , self.prediction_R, self.prediction_S, 
+        self.loss_joint = self.criterion_joint(self.input_images , self.prediction_R, self.prediction_R_human, self.prediction_S, 
                                                     self.targets, data_set_name, epoch)
         print("validation loss is %f"%self.loss_joint)
         return self.loss_joint
 
+    def val_eval_intrinsics(self, epoch, data_set_name):
+        self.forward_both()
+        num_images = self.input_images.size(0)
+
+        total_iiw_loss = 0
+        for i in range(0, num_images):
+            judgements_eq = self.targets["eq_mat"][i]
+            judgements_ineq = self.targets["ineq_mat"][i]
+            random_filp = self.targets["random_filp"][i]
+            total_iiw_loss += self.criterion_joint.BatchRankingLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp).item()
+
+        return total_iiw_loss
+
     def evlaute_iiw(self, input_, targets):
         # switch to evaluation mode
         input_images = Variable(input_.cuda() , requires_grad = False)
-        prediction_R, prediction_S  = self.netG.forward(input_images)
+        prediction_R_rgb, prediction_S  = self.netG.g_model.forward(input_images)
+        if self.human_judgement_gray:
+            prediction_R = self.netG.rgb_to_human_gray(prediction_R_rgb)
+        else:
+            prediction_R = prediction_R_rgb.mean(1, keepdim=True)
+        #prediction_R = prediction_R_rgb.mean(1, keepdim=True)
+
         return self.criterion_joint.evaluate_WHDR(prediction_R, targets)
 
     def switch_to_train(self):
@@ -240,7 +284,7 @@ class Intrinsics_Model(BaseModel):
 
             # run model on the image to get predicted shading 
             # prediction_S , rgb_s = self.netS.forward(input_images)
-            prediction_R, prediction_S = self.netG.forward(input_images)
+            prediction_R, prediction_S = self.netG.g_model.forward(input_images)
             # prediction_Sr = prediction_S.repeat(1,3,1,1)
 
             # Write predicted images

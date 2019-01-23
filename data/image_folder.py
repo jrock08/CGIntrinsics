@@ -201,12 +201,12 @@ class CGIntrinsicsImageFolder(data.Dataset):
         gt_S = np.mean(gt_S, 2)
         gt_S = np.expand_dims(gt_S, axis = 2)
 
-        gt_R = np.mean(gt_R, 2)
-        gt_R = np.expand_dims(gt_R, axis = 2)
+        gt_R_gray = np.mean(gt_R, 2)
+        gt_R_gray = np.expand_dims(gt_R_gray, axis = 2)
         en_total = time.time()
         #print '{}: im_load: {} morph: {} DA: {} irridiance: {} total: {}'.format(path, im_load_time, morph_time, DA_time, irridiance_time, en_total - st_total)
 
-        return srgb_img, gt_R, gt_S, mask, random_filp
+        return srgb_img, gt_R_gray, gt_R, gt_S, mask, random_filp
 
     def CGIntrinsics_pair(self, path, gt_albedo, random_filp):
         import time
@@ -308,7 +308,7 @@ class CGIntrinsicsImageFolder(data.Dataset):
         # split_img_path = img_path.split('/')
         full_path = self.root + img_path
 
-        srgb_img, gt_R, gt_S, mask, random_filp = self.load_CGIntrinsics(img_path)
+        srgb_img, gt_R, gt_R_color, gt_S, mask, random_filp = self.load_CGIntrinsics(img_path)
 
         targets_1['CGIntrinsics_ordinal_path'] = img_path
         targets_1['random_filp'] = random_filp > 0.5
@@ -322,6 +322,7 @@ class CGIntrinsicsImageFolder(data.Dataset):
         final_img = torch.from_numpy(np.transpose(srgb_img, (2, 0, 1))).contiguous().float()
         targets_1['mask'] = torch.from_numpy(np.transpose(mask, (2 , 0 ,1))).contiguous().float()
         targets_1['gt_R'] = torch.from_numpy(np.transpose(gt_R, (2 , 0 ,1))).contiguous().float()
+        targets_1['gt_R_color'] = torch.from_numpy(np.transpose(gt_R_color, (2,0,1))).contiguous().float()
         targets_1['gt_S'] = torch.from_numpy(np.transpose(gt_S, (2 , 0 ,1))).contiguous().float()
         targets_1['path'] = full_path
 

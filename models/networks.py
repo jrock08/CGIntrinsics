@@ -317,6 +317,106 @@ class JointLoss(nn.Module):
 
         return total_loss/(num_valid_comparisons + 1e-6)
 
+    def BatchRankingHingeLoss(self, prediction_R, judgements_eq, judgements_ineq, random_flip):
+        eq_loss, ineq_loss = 0, 0
+        num_valid_eq = 0
+        num_valid_ineq = 0
+        tau = 0.425
+        eps_ = .1
+
+        rows = prediction_R.size(1)
+        cols = prediction_R.size(2)
+        num_channel = prediction_R.size(0)
+
+        # evaluate equality annotations densely 
+        if judgements_eq.size(1) > 2:
+            judgements_eq = judgements_eq.cuda()
+            R_vec = prediction_R.view(num_channel, -1)
+            # R_vec = torch.exp(R_vec)
+            # I_vec = I.view(1, -1)
+
+            y_1 = torch.floor(judgements_eq[:,0] * rows).long()
+            y_2 = torch.floor(judgements_eq[:,2] * rows).long()
+
+            if random_filp:
+                x_1 = cols - 1 - torch.floor(judgements_eq[:,1] * cols).long()
+                x_2 = cols - 1 - torch.floor(judgements_eq[:,3] * cols).long()
+            else:
+                x_1 = torch.floor(judgements_eq[:,1] * cols).long()
+                x_2 = torch.floor(judgements_eq[:,3] * cols).long()
+
+            # compute linear index for point 1
+            # y_1 = torch.floor(judgements_eq[:,0] * rows).long()
+            # x_1 = torch.floor(judgements_eq[:,1] * cols).long()
+            point_1_idx_linaer = y_1 * cols + x_1
+            # compute linear index for point 2
+            # y_2 = torch.floor(judgements_eq[:,2] * rows).long()
+            # x_2 = torch.floor(judgements_eq[:,3] * cols).long()
+            point_2_idx_linear = y_2 * cols + x_2
+
+            # extract all pairs of comparisions
+            points_1_vec = torch.index_select(R_vec, 1, Variable(point_1_idx_linaer, requires_grad = False))
+            points_2_vec = torch.index_select(R_vec, 1, Variable(point_2_idx_linear, requires_grad = False))
+
+            # I1_vec = torch.index_select(I_vec, 1, point_1_idx_linaer)
+            # I2_vec = torch.index_select(I_vec, 1, point_2_idx_linear)
+
+            weight = Variable(judgements_eq[:,4], requires_grad = False)
+            # weight = confidence#* torch.exp(4.0 * torch.abs(I1_vec - I2_vec) )
+
+            # compute loss
+            # eq_loss = torch.sum(torch.mul(weight, torch.mean(torch.abs(points_1_vec - points_2_vec),0) ))
+
+            eq_loss = torch.sum(torch.mul(weight, torch.mean(torch.pow(points_1_vec - points_2_vec,2),0) ))
+            num_valid_eq += judgements_eq.size(0) 
+
+        # compute inequality annotations
+        if judgements_ineq.size(1) > 2:
+            judgements_ineq = judgements_ineq.cuda()
+            R_intensity = torch.mean(prediction_R, 0)   
+            # R_intensity = torch.log(R_intensity)
+            R_vec_mean = R_intensity.view(1, -1)
+
+            y_1 = torch.floor(judgements_ineq[:,0] * rows).long()
+            y_2 = torch.floor(judgements_ineq[:,2] * rows).long()
+            # x_1 = torch.floor(judgements_ineq[:,1] * cols).long()
+            # x_2 = torch.floor(judgements_ineq[:,3] * cols).long()
+
+            if random_filp:
+                x_1 = cols - 1 - torch.floor(judgements_ineq[:,1] * cols).long()
+                x_2 = cols - 1 - torch.floor(judgements_ineq[:,3] * cols).long()
+            else:
+                x_1 = torch.floor(judgements_ineq[:,1] * cols).long()
+                x_2 = torch.floor(judgements_ineq[:,3] * cols).long()
+
+            # y_1 = torch.floor(judgements_ineq[:,0] * rows).long()
+            # x_1 = torch.floor(judgements_ineq[:,1] * cols).long()
+            point_1_idx_linaer = y_1 * cols + x_1
+            # y_2 = torch.floor(judgements_ineq[:,2] * rows).long()
+            # x_2 = torch.floor(judgements_ineq[:,3] * cols).long()
+            point_2_idx_linear = y_2 * cols + x_2
+
+            # extract all pairs of comparisions
+            points_1_vec = torch.index_select(R_vec_mean, 1, Variable(point_1_idx_linaer, requires_grad = False)).squeeze(0)
+            points_2_vec = torch.index_select(R_vec_mean, 1, Variable(point_2_idx_linear, requires_grad = False)).squeeze(0)
+            weight = Variable(judgements_ineq[:,4], requires_grad = False)
+
+            # point 2 should be always darker than (<) point 1
+            # compute loss 
+            relu_layer = nn.ReLU(True)
+            # ineq_loss = torch.sum(torch.mul(weight, relu_layer(points_2_vec - points_1_vec + tau) ) )
+            ineq_loss = torch.sum(torch.mul(weight, torch.pow( relu_layer(points_2_vec - points_1_vec + tau),2)  ) )
+            # ineq_loss = torch.sum(torch.mul(weight, torch.pow(relu_layer(tau - points_1_vec/points_2_vec),2)))
+
+            num_included = torch.sum( torch.ge(points_2_vec.data - points_1_vec.data, -tau).float().cuda() )
+            # num_included = torch.sum(torch.ge(points_2_vec.data/points_1_vec.data, 1./tau).float().cuda())
+
+            num_valid_ineq += num_included
+
+        # avoid divide by zero 
+        return eq_loss/(num_valid_eq + 1e-8) +  ineq_loss/(num_valid_ineq + 1e-8)
+
+
     def BatchRankingLoss(self, prediction_R, judgements_eq, judgements_ineq, random_filp):
         eq_loss, ineq_loss = 0, 0
         num_valid_eq = 0
@@ -409,7 +509,8 @@ class JointLoss(nn.Module):
             num_included = torch.sum( torch.ge(points_2_vec.data - points_1_vec.data, -tau).float().cuda() )
             # num_included = torch.sum(torch.ge(points_2_vec.data/points_1_vec.data, 1./tau).float().cuda())
 
-            num_valid_ineq += num_included 
+            num_valid_ineq += judgements_ineq.size(0)
+            #num_valid_ineq += num_included
 
         # avoid divide by zero 
         return eq_loss/(num_valid_eq + 1e-8) +  ineq_loss/(num_valid_ineq + 1e-8)
@@ -1033,12 +1134,12 @@ class JointLoss(nn.Module):
             # compute Loss
             # eq_loss = torch.sum(torch.mul(weight, torch.mean(torch.abs(points_1_vec - points_2_vec),0) ))
             eq_loss = torch.sum( torch.mean( torch.pow(points_1_vec - points_2_vec,2) ,0) )
-            num_valid_eq += judgements_eq.size(0) 
+            num_valid_eq += judgements_eq.size(0)
 
         # # compute inequality annotations
         if judgements_ineq.size(1) > 2:
             judgements_ineq = judgements_ineq.cuda()
-            R_intensity = torch.mean(prediction_R, 0)   
+            R_intensity = torch.mean(prediction_R, 0)
             # R_intensity = torch.log(R_intensity)
             R_vec_mean = R_intensity.view(1, -1)
 
@@ -1070,13 +1171,14 @@ class JointLoss(nn.Module):
             num_included = torch.sum( torch.ge(points_2_vec.data - points_1_vec.data, -tau).float().cuda() )
             # num_included = torch.sum(torch.ge(points_2_vec.data/points_1_vec.data, 1./tau).float().cuda())
 
-            num_valid_ineq += num_included 
+            num_valid_ineq += judgements_ineq.size(0)
+            #num_val_inex += num_included
 
         # avoid divide by zero 
         return (eq_loss)/(num_valid_eq + 1e-8) + ineq_loss/(num_valid_ineq + 1e-8)
 
 
-    def __call__(self, input_images, prediction_R, prediction_S, targets, data_set_name, epoch):
+    def __call__(self, input_images, prediction_R, prediction_R_human, prediction_S, targets, data_set_name, epoch):
 
         lambda_CG = 0.5
 
@@ -1111,7 +1213,7 @@ class JointLoss(nn.Module):
                 judgements_eq = targets["eq_mat"][i]
                 judgements_ineq = targets["ineq_mat"][i]   
                 random_filp = targets["random_filp"][i]
-                total_iiw_loss += self.w_IIW * self.BatchRankingLoss(prediction_R[i,:,:,:], judgements_eq, judgements_ineq, random_filp)
+                total_iiw_loss += self.w_IIW * self.BatchRankingLoss(prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp)
 
             total_iiw_loss = (total_iiw_loss)/num_images
 
@@ -1291,12 +1393,12 @@ class JointLoss(nn.Module):
             return None
 
     def evaluate_WHDR(self, prediction_R, targets):
-        # num_images = prediction_S.size(0) # must be even number         
+        # num_images = prediction_S.size(0) # must be even number
         total_whdr = float(0)
         total_whdr_eq = float(0)
         total_whdr_ineq = float(0)
-        
-        count = float(0) 
+
+        count = float(0)
 
         for i in range(0, prediction_R.size(0)):
             prediction_R_np = prediction_R.data[i,:,:,:].cpu().numpy()
@@ -1423,19 +1525,19 @@ class UnetSkipConnectionBlock(nn.Module):
                                         padding=1)
 
             conv_1 = nn.Conv2d(inner_nc, inner_nc, kernel_size=3,
-                             stride=1, padding=1)            
+                             stride=1, padding=1)
             conv_2 = nn.Conv2d(inner_nc, inner_nc, kernel_size=3,
                              stride=1, padding=1)
 
             # conv_1_o = nn.Conv2d(inner_nc, 1, kernel_size=3,
-                             # stride=1, padding=1)            
+                             # stride=1, padding=1)
             conv_2_o = nn.Conv2d(inner_nc, n_output_dim, kernel_size=3,
                              stride=1, padding=1)
 
             upnorm_1 = norm_layer(inner_nc, affine=True)
             upnorm_2 = norm_layer(inner_nc, affine=True)
             # uprelu2_o = nn.ReLU(False)
-            
+
             down = [downconv]
             up_1 = [uprelu1, upconv_1, upnorm_1, nn.ReLU(False), conv_1, nn.ReLU(False), conv_1_o]
             up_2 = [uprelu2, upconv_2, upnorm_2, nn.ReLU(False), conv_2, nn.ReLU(False), conv_2_o]
@@ -1840,43 +1942,15 @@ class MultiUnetSkipConnectionBlock(nn.Module):
 
         if outermost:
             n_output_dim = 3
-            # upconv = nn.ConvTranspose2d(inner_nc * 2, n_output_dim,
-                                        # kernel_size=4, stride=2,
-                                        # padding=1)
-            # downconv = nn.Conv2d(outer_nc, inner_nc, kernel_size=4,
-                             # stride=2, padding=1)
-            # conv1 = nn.Conv2d(inner_nc, 1, kernel_size=5,
-            #                  stride=1, padding=2)
-            # conv2 = nn.Conv2d(inner_nc, 3, kernel_size=5,
-            #                  stride=1, padding=2)
             down = [downconv]
-            
-            # upconv_model_1 = [nn.ReLU(False), nn.ConvTranspose2d(inner_nc * 2, 1,
-            #                             kernel_size=4, stride=2, padding=1)]
 
-            # upconv_model_2 = [nn.ReLU(False), nn.ConvTranspose2d(inner_nc * 2, 1,
-            #                             kernel_size=4, stride=2, padding=1)]
-
-            # upconv_model_u = [nn.ReLU(False), nn.ConvTranspose2d(inner_nc * 2, inner_nc,
-                                        # kernel_size=4, stride=2, padding=1), nn.ReLU(False), 
-                                # nn.Conv2d(inner_nc, 1, kernel_size=1) , nn.Sigmoid()]
-
-            # self.upconv_model_u = nn.Sequential(*upconv_model_u)
             upconv_model_1 = [nn.ReLU(False), nn.ConvTranspose2d(inner_nc * 2, inner_nc,
-                                        kernel_size=4, stride=2, padding=1), norm_layer(inner_nc, affine=True), nn.ReLU(False), 
-                                nn.Conv2d(inner_nc, 1, kernel_size= 1, bias=True)]
+                                        kernel_size=4, stride=2, padding=1), norm_layer(inner_nc, affine=True), nn.ReLU(False),
+                                nn.Conv2d(inner_nc, 3, kernel_size= 1, bias=True)]
             upconv_model_2 = [nn.ReLU(False), nn.ConvTranspose2d(inner_nc * 2, inner_nc,
-                                        kernel_size=4, stride=2, padding=1) , norm_layer(inner_nc, affine=True), nn.ReLU(False), 
+                                        kernel_size=4, stride=2, padding=1) , norm_layer(inner_nc, affine=True), nn.ReLU(False),
                                 nn.Conv2d(inner_nc, 1, kernel_size= 1, bias=True)]
-
-            # model = down + [submodule] + up
-            # upconv_model_1 = up_1
-            # upconv_model_2 = up_2
-
         elif innermost:
-            # upconv = nn.ConvTranspose2d(inner_nc, outer_nc,
-            #                             kernel_size=4, stride=2,
-            #                             padding=1)
             down = [downrelu, downconv]
             upconv_model_1 = [nn.ReLU(False), nn.ConvTranspose2d(inner_nc, outer_nc,
                                         kernel_size=4, stride=2,
@@ -1884,20 +1958,7 @@ class MultiUnetSkipConnectionBlock(nn.Module):
             upconv_model_2 = [nn.ReLU(False), nn.ConvTranspose2d(inner_nc, outer_nc,
                                         kernel_size=4, stride=2,
                                         padding=1), norm_layer(outer_nc, affine=True)]
-            #  for rgb shading 
-            # int_conv = [nn.ReLU(False), nn.Conv2d(inner_nc, inner_nc/2, kernel_size=3,
-                             # stride=1, padding=1)]
-            # int_conv = [nn.AdaptiveAvgPool2d((2,2)) , nn.ReLU(False),  nn.Conv2d(inner_nc, inner_nc/2, kernel_size=3, stride=2, padding=1), nn.ReLU(False)]
-            # int_conv = [nn.AdaptiveAvgPool2d((2,2)) , nn.ReLU(False),  nn.Conv2d(inner_nc, inner_nc/2, kernel_size=3, stride=2, padding=1), nn.ReLU(False) \
-                        # nn.Conv2d(inner_nc/2, inner_nc/4, kernel_size=3, stride=1, padding=1), nn.ReLU(False)]
-
-            # fc = [nn.Linear(256, 3)]
-            # self.int_conv = nn.Sequential(* int_conv) 
-            # self.fc = nn.Sequential(* fc)
         else:
-            # upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc,
-            #                             kernel_size=4, stride=2,
-            #                             padding=1)
             down = [downrelu, downconv, downnorm]
             up_1 = [nn.ReLU(False), nn.ConvTranspose2d(inner_nc * 2, outer_nc,
                                         kernel_size=4, stride=2,

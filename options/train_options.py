@@ -1,4 +1,6 @@
 from .base_options import BaseOptions
+import os
+from util import util
 
 class TrainOptions(BaseOptions):
     def initialize(self):
@@ -22,3 +24,19 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument('--no_flip'  , action='store_true', help='if specified, do not flip the images for data argumentation')
         # NOT-IMPLEMENTED self.parser.add_argument('--preprocessing', type=str, default='resize_and_crop', help='resizing/cropping strategy')
         self.isTrain = True
+
+    def parse(self):
+        super(TrainOptions, self).parse()
+
+        args = vars(self.opt)
+
+        # save to the disk
+        expr_dir =  os.path.join(self.opt.checkpoints_dir, self.opt.name)
+        util.mkdirs(expr_dir)
+        file_name = os.path.join(expr_dir, 'opt.txt')
+        with open(file_name, 'wt') as opt_file:
+            opt_file.write('------------ Options -------------\n')
+            for k, v in sorted(args.items()):
+                opt_file.write('%s: %s\n' % (str(k), str(v)))
+            opt_file.write('-------------- End ----------------\n')
+        return self.opt

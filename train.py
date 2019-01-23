@@ -21,7 +21,7 @@ import math
 opt = TrainOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
 
 DEBUG = opt.debug
-batch_size = 6*len(opt.gpu_ids)
+batch_size = 5*len(opt.gpu_ids)
 print 'batch_size: {}'.format(batch_size)
 #batch_size = 4
 train_on_IIW = True
@@ -104,26 +104,26 @@ count_saw = 0
 count_iiw = 0
 num_orientation = 5
 
-import time
-print 'checking how long it takes to load data'
-st = time.time()
-for j, data_val in enumerate(dataset_val_CGIntrinsics):
-    print j
-    if DEBUG and j >= 4:
-        break
-en = time.time()
-print 'loading CGIntrinsics data takes {}'.format((en-st) / j)
-
-st = time.time()
-for j, data_val in enumerate(dataset_val_IIW):
-    print j
-    if DEBUG and j >= 4:
-        break
-en = time.time()
-print 'loading IIW data takes {} time'.format((en-st) / j)
+#import time
+#print 'checking how long it takes to load data'
+#st = time.time()
+#for j, data_val in enumerate(dataset_val_CGIntrinsics):
+#    print j
+#    if DEBUG and j >= 4:
+#        break
+#en = time.time()
+#print 'loading CGIntrinsics data takes {}'.format((en-st) / j)
+#
+#st = time.time()
+#for j, data_val in enumerate(dataset_val_IIW):
+#    print j
+#    if DEBUG and j >= 4:
+#        break
+#en = time.time()
+#print 'loading IIW data takes {} time'.format((en-st) / j)
 
 for epoch in range(0, 50):
-    if epoch > 0 and epoch % 16 ==0:
+    if epoch > 0 and epoch % 2 ==0:
         model.scaled_learning_rate(rate=2.)
 
     for i, data in enumerate(dataset_CGIntrinsics):

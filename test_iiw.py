@@ -1,7 +1,7 @@
 import time
 import torch
 import numpy as np
-from options.train_options import TrainOptions
+from options.test_options import TestOptions
 import sys, traceback
 import h5py
 from data.data_loader import CreateDataLoader
@@ -9,12 +9,12 @@ from models.models import create_model
 # from data.data_loader import CreateDataLoader_TEST
 from data.data_loader import CreateDataLoaderIIWTest
 
-opt = TrainOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
+opt = TestOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
 
+#root = "/home/zl548/phoenix24/"
+#full_root = root +'/phoenix/S6/zl548/'
 
-root = "/home/zl548/phoenix24/"
-full_root = root +'/phoenix/S6/zl548/'
-
+full_root = '/data/jrock/IIW_2019/'
 model = create_model(opt)
 
 
@@ -49,7 +49,8 @@ def test_iiw(model, list_name):
 
 
 print("WE ARE IN TESTING PHASE!!!!")
-WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'test_list/')
+#WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'test_list/')
+WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'train_val_list/val_list/')
 print('WHDR %f'%WHDR)
 
 print("We are done")
