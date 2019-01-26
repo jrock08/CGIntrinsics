@@ -51,7 +51,7 @@ def define_G(input_nc, output_nc, ngf, which_model_netG, norm='batch', use_dropo
     elif which_model_netG == 'unet_256':
         # netG = SingleUnetGenerator_S(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
         # netG = SingleUnetGenerator_R(input_nc, output_nc, 7, ngf, norm_layer=nn.BatchNorm2d, use_dropout=use_dropout, gpu_ids=gpu_ids, )
-        output_nc = 3
+        #output_nc = 3
         # netG2 = SingleUnetGenerator_R2(input_nc, output_nc, 7, ngf, norm_layer=nn.BatchNorm2d, use_dropout=use_dropout, gpu_ids=gpu_ids)
         # netG = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
         netG = MultiUnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
@@ -1011,6 +1011,9 @@ class JointLoss(nn.Module):
         gt_vec = gt_vec.unsqueeze(1).float().cpu()
         pred_vec = pred_vec.unsqueeze(1).float().cpu()
 
+        if gt_vec.size(0) == 0:
+            return torch.tensor(0)
+
         scale, _ = torch.gels(gt_vec.data, pred_vec.data)
         scale = scale[0,0]
 
@@ -1234,12 +1237,19 @@ class JointLoss(nn.Module):
             gt_R = Variable(targets['gt_R'].cuda(), requires_grad = False)
             gt_S = Variable(targets['gt_S'].cuda(), requires_grad = False)
 
-            R_loss = lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_R), gt_R, mask_R, 0.5)            
-            
+            R_loss = 0
+            S_loss = 0
+            for i in range(0, gt_R.size(0)):
+                R_loss += lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_R[i].unsqueeze(0)), gt_R[i].unsqueeze(0), mask_R[i].unsqueeze(0), .5)
+                S_loss += lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_S[i].unsqueeze(0)), gt_S[i].unsqueeze(0), mask_S[i].unsqueeze(0), .5)
+
+
+            #R_loss = lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_R), gt_R, mask_R, 0.5)            
+
             # using ScaleInvarianceFramework might achieve better performance if we train on both IIW and SAW,
             # but LinearScaleInvarianceFramework could produce better perforamnce if trained on CGIntrinsics only
 
-            S_loss = lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_S), gt_S, mask_S, 0.5)
+            #S_loss = lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_S), gt_S, mask_S, 0.5)
             # S_loss = lambda_CG * self.ScaleInvarianceFramework(prediction_S, torch.log(gt_S), mask_S, 0.5)  
 
             reconstr_loss = lambda_CG  * self.w_reconstr * self.SUNCGReconstLoss(torch.exp(prediction_R), torch.exp(prediction_S), mask_img, targets)
@@ -1912,7 +1922,7 @@ class MultiUnetGenerator(nn.Module):
         unet_block = MultiUnetSkipConnectionBlock(ngf * 4, ngf * 8, unet_block, norm_layer=norm_layer)
         unet_block = MultiUnetSkipConnectionBlock(ngf * 2, ngf * 4, unet_block, norm_layer=norm_layer)
         unet_block = MultiUnetSkipConnectionBlock(ngf, ngf * 2, unet_block, norm_layer=norm_layer)
-        unet_block = MultiUnetSkipConnectionBlock(output_nc, ngf, unet_block, outermost=True, norm_layer=norm_layer)
+        unet_block = MultiUnetSkipConnectionBlock(input_nc, ngf, unet_block, outermost=True, norm_layer=norm_layer, output_nc = output_nc)
 
         self.model = unet_block
 
@@ -1928,7 +1938,7 @@ class MultiUnetGenerator(nn.Module):
 #   |-- downsampling -- |submodule| -- upsampling --|
 class MultiUnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc,
-                 submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False):
+                 submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False, output_nc=None):
         super(MultiUnetSkipConnectionBlock, self).__init__()
         self.outermost = outermost
         self.innermost = innermost
@@ -1941,12 +1951,14 @@ class MultiUnetSkipConnectionBlock(nn.Module):
         upnorm = norm_layer(outer_nc, affine=True)
 
         if outermost:
-            n_output_dim = 3
+            if output_nc is None:
+                output_nc = outer_nc
+
             down = [downconv]
 
             upconv_model_1 = [nn.ReLU(False), nn.ConvTranspose2d(inner_nc * 2, inner_nc,
                                         kernel_size=4, stride=2, padding=1), norm_layer(inner_nc, affine=True), nn.ReLU(False),
-                                nn.Conv2d(inner_nc, 3, kernel_size= 1, bias=True)]
+                                nn.Conv2d(inner_nc, output_nc, kernel_size= 1, bias=True)]
             upconv_model_2 = [nn.ReLU(False), nn.ConvTranspose2d(inner_nc * 2, inner_nc,
                                         kernel_size=4, stride=2, padding=1) , norm_layer(inner_nc, affine=True), nn.ReLU(False),
                                 nn.Conv2d(inner_nc, 1, kernel_size= 1, bias=True)]

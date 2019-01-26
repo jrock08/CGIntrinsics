@@ -137,7 +137,7 @@ for epoch in range(0, 50):
                 targets = data_val['target_1']
 
                 model.set_input(stacked_img, targets)
-                CGI_val_loss += model.validate_intrinsics(epoch, data_set_name) / dataset_val_size_CGIntrinsics
+                CGI_val_loss += model.val_eval_loss(epoch, data_set_name) / dataset_val_size_CGIntrinsics
                 if DEBUG and j > 3:
                     break
 
@@ -149,7 +149,7 @@ for epoch in range(0, 50):
                     targets = data_val['target_1']
 
                     model.set_input(stacked_img, targets)
-                    IIW_val_loss += model.validate_intrinsics(epoch, data_set_name) / dataset_val_size_IIW
+                    IIW_val_loss += model.val_eval_loss(epoch, data_set_name) / dataset_val_size_IIW
                     if DEBUG and j > 3:
                         break
 

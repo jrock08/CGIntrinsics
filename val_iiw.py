@@ -28,19 +28,34 @@ data_loader_val_IIW = CreateDataLoaderIIWVal(full_root, val_list_IIW, 0, 1)
 dataset_val_size_IIW = len(data_loader_val_IIW)
 dataset_val_IIW = data_loader_val_IIW.load_data()
 
+val_list_CGIntrinsics = full_root + '/CGIntrinsics/intrinsics_final/train_val_list/val_list/'
+data_loader_val_CGI = CreateDataLoaderCGIntrinsicsTest(full_root, val_list_CGIntrinsics, 1)
+dataset_val_CGIntrinsics = data_loader_val_CGI.load_data()
+dataset_val_size_CGIntrinsics = len(data_loader_val_CGI)
+
 model = create_model(opt)
 model.switch_to_eval()
 
 epoch = 0
 IIW_val_loss = 0
+CGI_val_loss = 0
 for i, data in enumerate(dataset_val_IIW):
     stacked_img = data['img_1']
     targets = data['target_1']
 
     model.set_input(stacked_img, targets)
     data_set_name = 'IIW'
-    IIW_val_loss += model.val_eval_intrinsics(epoch, data_set_name)
+    IIW_val_loss += model.val_eval_loss(epoch, data_set_name)
     #IIW_val_loss += model.validate_intrinsics(epoch, data_set_name)
+print 'IIW {}'.format(IIW_val_loss)
 
-print IIW_val_loss
+for i, data in enumerate(dataset_val_CGIntrinsics):
+    stacked_img = data['img_1']
+    targets = data['target_1']
+
+    model.set_input(stacked_img, targets)
+    data_set_name = 'CGIntrinsics'
+    CGI_val_loss += model.val_eval_loss(epoch, data_set_name)
+
+print 'CGI {}'.format(CGI_val_loss)
 

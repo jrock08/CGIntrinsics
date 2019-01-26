@@ -47,7 +47,10 @@ class Intrinsics_Model(BaseModel):
 
         # define tensors
         print("LOAD Unet pix2pix version")
-        output_nc = 1
+        if opt.human_judgement_gray:
+            output_nc = 3
+        else:
+            output_nc = 1
         g_model = networks.define_G(opt.input_nc, output_nc, opt.ngf,
                                         opt.which_model_netG, 'batch', opt.use_dropout, self.gpu_ids)
         model = WrapperModel()
@@ -93,15 +96,17 @@ class Intrinsics_Model(BaseModel):
 
     def forward_both(self):
         self.input_images = Variable(self.input.float().cuda(), requires_grad = False)
-        prediction_R_rgb, self.prediction_S  = self.netG.g_model.forward(self.input_images)
-        self.prediction_R = prediction_R_rgb.mean(1, keepdim=True)
+        prediction_R_raw, self.prediction_S  = self.netG.g_model.forward(self.input_images)
         if self.human_judgement_gray:
-            if self.gpu_ids and isinstance(prediction_R_rgb, torch.cuda.FloatTensor):
-                self.prediction_R_human = nn.parallel.data_parallel(self.netG.rgb_to_human_gray, prediction_R_rgb, self.gpu_ids)
+            if self.gpu_ids and isinstance(prediction_R_raw, torch.cuda.FloatTensor):
+                self.prediction_R_human = nn.parallel.data_parallel(self.netG.rgb_to_human_gray, prediction_R_raw, self.gpu_ids)
             else:
-                self.prediction_R_human = self.rgb_to_human_gray(prediction_R_rgb)
+                self.prediction_R_human = self.rgb_to_human_gray(prediction_R_raw)
+
+            self.prediction_R = prediction_R_raw[:,0,:,:].unsqueeze(1)
         else:
-            self.prediction_R_human = self.prediction_R
+            self.prediction_R = prediction_R_raw
+            self.prediction_R_human = prediction_R_raw
 
         #self.prediction_R, self.prediction_S  = self.netG.forward(self.input_images)
 
@@ -121,7 +126,7 @@ class Intrinsics_Model(BaseModel):
 
     def optimize_intrinsics(self, epoch, data_set_name):
         self.forward_both()
-        self.optimizer_G.zero_grad()        
+        self.optimizer_G.zero_grad()
 
         joint_loss = self.backward_G(epoch, data_set_name)
 
@@ -148,6 +153,38 @@ class Intrinsics_Model(BaseModel):
             total_iiw_loss += self.criterion_joint.BatchRankingLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp).item()
 
         return total_iiw_loss
+
+    def val_eval_loss(self, epoch, data_set_name):
+        self.forward_both()
+        num_images = self.input_images.size(0)
+
+        if data_set_name == 'IIW':
+            total_iiw_loss = 0
+            for i in range(0, num_images):
+                judgements_eq = self.targets["eq_mat"][i]
+                judgements_ineq = self.targets["ineq_mat"][i]
+                random_filp = self.targets["random_filp"][i]
+                total_iiw_loss += self.criterion_joint.BatchRankingLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp).item()
+            return total_iiw_loss
+        elif data_set_name == 'CGIntrinsics':
+            total_loss = 0
+            prediction_R = self.prediction_R.mean(1, keepdim=True)
+            prediction_S = self.prediction_S
+            gt_R = Variable(self.targets['gt_R'].cuda(), requires_grad = False)
+            gt_S = Variable(self.targets['gt_S'].cuda(), requires_grad = False)
+
+            mask = Variable(self.targets['mask'].cuda(), requires_grad = False)
+            mask_R = mask[:,0,:,:].unsqueeze(1).repeat(1,prediction_R.size(1),1,1)
+            mask_S = mask[:,0,:,:].unsqueeze(1).repeat(1,prediction_S.size(1),1,1)
+
+            R_loss = 0
+            S_loss = 0
+            for i in range(0, gt_R.size(0)):
+                R_loss += self.criterion_joint.LinearScaleInvarianceFramework(torch.exp(prediction_R[i].unsqueeze(0)), gt_R[i].unsqueeze(0), mask_R[i].unsqueeze(0), .5).item()
+                S_loss += self.criterion_joint.LinearScaleInvarianceFramework(torch.exp(prediction_S[i].unsqueeze(0)), gt_S[i].unsqueeze(0), mask_S[i].unsqueeze(0), .5).item()
+            return R_loss + S_loss
+        else:
+            pass
 
     def evlaute_iiw(self, input_, targets):
         # switch to evaluation mode
