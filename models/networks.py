@@ -1402,17 +1402,18 @@ class JointLoss(nn.Module):
         else:
             return None
 
-    def evaluate_WHDR(self, prediction_R, targets):
+    def evaluate_WHDR(self, prediction_R, targets, thresholds = [.1]):
         # num_images = prediction_S.size(0) # must be even number
-        total_whdr = float(0)
-        total_whdr_eq = float(0)
-        total_whdr_ineq = float(0)
+        total_whdr = np.zeros(len(thresholds))
+        total_whdr_eq = np.zeros(len(thresholds))
+        total_whdr_ineq = np.zeros(len(thresholds))
 
         count = float(0)
 
         for i in range(0, prediction_R.size(0)):
             prediction_R_np = prediction_R.data[i,:,:,:].cpu().numpy()
-            prediction_R_np = np.transpose(np.exp(prediction_R_np * 0.4545), (1,2,0))
+            #prediction_R_np = np.transpose(np.exp(prediction_R_np * 0.4545), (1,2,0))
+            prediction_R_np = np.transpose(np.exp(prediction_R_np), (1,2,0))
 
             # o_h = targets['oringinal_shape'][0].numpy()
             # o_w = targets['oringinal_shape'][1].numpy()
@@ -1428,11 +1429,18 @@ class JointLoss(nn.Module):
             # print(targets["judgements_path"][i])
             # load Json judgement 
             judgements = json.load(open(targets["judgements_path"][i]))
-            whdr, whdr_eq, whdr_ineq = self.compute_whdr(prediction_R_np, judgements, 0.1)
+            whdrs = []
+            whdrs_eq = []
+            whdrs_ineq = []
+            for t in thresholds:
+                whdr, whdr_eq, whdr_ineq = self.compute_whdr(prediction_R_np, judgements, t)
+                whdrs.append(whdr)
+                whdrs_eq.append(whdr_eq)
+                whdrs_ineq.append(whdr_ineq)
 
-            total_whdr += whdr
-            total_whdr_eq += whdr_eq
-            total_whdr_ineq += whdr_ineq
+            total_whdr += np.array(whdrs)
+            total_whdr_eq += np.array(whdrs_eq)
+            total_whdr_ineq += np.array(whdrs_ineq)
             count += 1.
 
         return total_whdr, total_whdr_eq, total_whdr_ineq, count

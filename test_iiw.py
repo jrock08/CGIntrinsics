@@ -19,13 +19,15 @@ model = create_model(opt)
 
 
 def test_iiw(model, list_name):
-    total_loss =0.0
-    total_loss_eq =0.0
-    total_loss_ineq =0.0
-    total_count = 0.0
     # print("============================= Validation ============================")
     model.switch_to_eval()
 
+    outp = []
+    thresholds = np.linspace(0,1,15)
+    total_loss = np.zeros(len(thresholds))
+    total_loss_eq = np.zeros(len(thresholds))
+    total_loss_ineq = np.zeros(len(thresholds))
+    total_count = 0.0
     # for 3 different orientation
     for j in range(0,3):
         # print("============================= Testing EVAL MODE ============================", j)
@@ -37,20 +39,24 @@ def test_iiw(model, list_name):
         for i, data in enumerate(dataset_iiw_test):
             stacked_img = data['img_1']
             targets = data['target_1']
-            total_whdr, total_whdr_eq, total_whdr_ineq, count = model.evlaute_iiw(stacked_img, targets)
+            total_whdr, total_whdr_eq, total_whdr_ineq, count = model.evlaute_iiw(stacked_img, targets, thresholds)
             total_loss += total_whdr
             total_loss_eq += total_whdr_eq
             total_loss_ineq += total_whdr_ineq
 
             total_count += count
-            print("Testing WHDR error ",j, i , total_loss/total_count)
+            print("Testing WHDR error ", j, i, total_loss/total_count)
 
     return total_loss/(total_count), total_loss_eq/total_count, total_loss_ineq/total_count
 
 
 print("WE ARE IN TESTING PHASE!!!!")
+outp = test_iiw(model, 'test_list/')
+print 'WHDR {}'.format(outp[0])
+#for WHDR, WHDR_EQ, WHDR_INEQ in outp:
+#    print('WHDR %f'%WHDR)
+
 #WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'test_list/')
-WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'train_val_list/val_list/')
-print('WHDR %f'%WHDR)
+#WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'train_val_list/val_list/')
 
 print("We are done")

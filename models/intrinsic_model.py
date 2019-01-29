@@ -96,19 +96,23 @@ class Intrinsics_Model(BaseModel):
 
     def forward_both(self):
         self.input_images = Variable(self.input.float().cuda(), requires_grad = False)
-        prediction_R_raw, self.prediction_S  = self.netG.g_model.forward(self.input_images)
+        self.prediction_R, self.prediction_R_human, self.prediction_S = self.forward_eval(self.input_images)
+
+    def forward_eval(self, input_images):
+        prediction_R_raw, prediction_S  = self.netG.g_model.forward(input_images)
         if self.human_judgement_gray:
             if self.gpu_ids and isinstance(prediction_R_raw, torch.cuda.FloatTensor):
-                self.prediction_R_human = nn.parallel.data_parallel(self.netG.rgb_to_human_gray, prediction_R_raw, self.gpu_ids)
+                prediction_R_human = nn.parallel.data_parallel(self.netG.rgb_to_human_gray, prediction_R_raw, self.gpu_ids)
             else:
-                self.prediction_R_human = self.rgb_to_human_gray(prediction_R_raw)
+                prediction_R_human = self.rgb_to_human_gray(prediction_R_raw)
 
-            self.prediction_R = prediction_R_raw[:,0,:,:].unsqueeze(1)
+            prediction_R = prediction_R_raw[:,0,:,:].unsqueeze(1)
         else:
-            self.prediction_R = prediction_R_raw
-            self.prediction_R_human = prediction_R_raw
+            prediction_R = prediction_R_raw
+            prediction_R_human = prediction_R_raw
 
-        #self.prediction_R, self.prediction_S  = self.netG.forward(self.input_images)
+        return prediction_R, prediction_R_human, prediction_S
+
 
     #get image paths
     def get_image_paths(self):
@@ -168,7 +172,7 @@ class Intrinsics_Model(BaseModel):
             return total_iiw_loss
         elif data_set_name == 'CGIntrinsics':
             total_loss = 0
-            prediction_R = self.prediction_R.mean(1, keepdim=True)
+            prediction_R = self.prediction_R
             prediction_S = self.prediction_S
             gt_R = Variable(self.targets['gt_R'].cuda(), requires_grad = False)
             gt_S = Variable(self.targets['gt_S'].cuda(), requires_grad = False)
@@ -186,17 +190,16 @@ class Intrinsics_Model(BaseModel):
         else:
             pass
 
-    def evlaute_iiw(self, input_, targets):
+    def evlaute_iiw(self, input_, targets, threshold = .1):
         # switch to evaluation mode
         input_images = Variable(input_.cuda() , requires_grad = False)
-        prediction_R_rgb, prediction_S  = self.netG.g_model.forward(input_images)
-        if self.human_judgement_gray:
-            prediction_R = self.netG.rgb_to_human_gray(prediction_R_rgb)
-        else:
-            prediction_R = prediction_R_rgb.mean(1, keepdim=True)
-        #prediction_R = prediction_R_rgb.mean(1, keepdim=True)
+        prediction_R, prediction_R_human, prediction_S = self.forward_eval(input_images)
 
-        return self.criterion_joint.evaluate_WHDR(prediction_R, targets)
+        return self.criterion_joint.evaluate_WHDR(prediction_R_human, targets, threshold)
+
+    def get_output_images(self, input_):
+        input_images = Variable(input_.cuda() , requires_grad = False)
+        prediction_R, prediction_R_human, prediction_S = self.forward_eval(input_images)
 
     def switch_to_train(self):
         self.netG.train()
