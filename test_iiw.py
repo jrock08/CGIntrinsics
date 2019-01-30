@@ -50,8 +50,10 @@ def test_iiw(model, list_name):
     return total_loss/(total_count), total_loss_eq/total_count, total_loss_ineq/total_count
 
 
-print("WE ARE IN TESTING PHASE!!!!")
-outp = test_iiw(model, 'test_list/')
+#print("WE ARE IN TESTING PHASE!!!!")
+outp = test_iiw(model, 'train_val_list/val_list/')
+with open('val_whdr.txt','a') as f:
+    f.write('WHDR {}\n'.format(outp[0]))
 print 'WHDR {}'.format(outp[0])
 #for WHDR, WHDR_EQ, WHDR_INEQ in outp:
 #    print('WHDR %f'%WHDR)

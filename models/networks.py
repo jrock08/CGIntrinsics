@@ -139,6 +139,7 @@ class JointLoss(nn.Module):
         self.w_IIW = 4.0
         self.w_feature = 0.75
         self.w_grad = 0.25
+        self.w_human_similarity = 1e-3
         self.local_s_w = np.array([[0.5,    0.5,   0.5,    0.5,    0.5], \
                                    [0.5,    1 ,    1 ,     1,      0.5],\
                                    [0.5,    1,     1,      1,      0.5],\
@@ -1199,6 +1200,19 @@ class JointLoss(nn.Module):
             rs_loss = rs_loss +  0.5 * self.w_rs_local * self.LocalAlebdoSmoothenessLoss(prediction_R_1, targets,1)
             rs_loss = rs_loss +  0.3333 * self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R_2, targets,2)
             rs_loss = rs_loss +  0.25 * self.w_rs_local   * self.LocalAlebdoSmoothenessLoss(prediction_R_3, targets,3)
+
+            prediction_R_human_1 = prediction_R_human[:,:,::2,::2]
+            prediction_R_human_2 = prediction_R_human_1[:,:,::2,::2]
+            prediction_R_human_3 = prediction_R_human_2[:,:,::2,::2]
+
+            rs_human_loss = self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R_human, targets,0)
+            rs_human_loss = rs_human_loss +  0.5 * self.w_rs_local * self.LocalAlebdoSmoothenessLoss(prediction_R_human_1, targets,1)
+            rs_human_loss = rs_human_loss +  0.3333 * self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R_human_2, targets,2)
+            rs_human_loss = rs_human_loss +  0.25 * self.w_rs_local   * self.LocalAlebdoSmoothenessLoss(prediction_R_human_3, targets,3)
+
+            rs_loss = rs_loss * .5 + rs_human_loss + .5
+
+            similarity = self.w_human_similarity * (torch.abs(prediction_R.detach() - prediction_R_human)).mean()
 
             # # Lighting smoothness Loss
             ss_loss = self.w_ss_dense * self.BilateralRefSmoothnessLoss(prediction_S, targets, 'S', 2)
