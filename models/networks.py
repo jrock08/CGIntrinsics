@@ -74,6 +74,14 @@ def define_G(input_nc, output_nc, ngf, which_model_netG, norm='batch', use_dropo
 
     return netG
 
+def define_HumanJudgement(input_nc, which_model):
+    if which_model == 'simple':
+        return nn.Conv2d(input_nc, 1, kernel_size=1)
+    elif which_model == 'mlp':
+        return nn.Sequential(nn.Conv2d(input_nc, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 1, kernel_size=1))
+    elif which_model == 'residual':
+        model = nn.Sequential(nn.Conv2d(input_nc, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 1, kernel_size=1), nn.Tanh())
+        return ResidualNetwork([1], model)
 
 def define_D(input_nc, ndf, which_model_netD,
              n_layers_D=3, norm='batch', use_sigmoid=False, gpu_ids=[]):
@@ -123,6 +131,16 @@ class Sparse(Function):
         grad_input = torch.mm(S.t(), grad_output)
         # grad_input = grad_input.cuda()
         return grad_input, grad_weight
+
+class ResidualNetwork(nn.Module):
+    def __init__(self, pass_selection, adjust_model):
+        super(ResidualNetwork, self).__init__()
+        self.pass_selection = pass_selection
+        self.adjust_model = adjust_model
+
+    def forward(self, x):
+        passforward = torch.index_select(x, 1, torch.cuda.LongTensor(self.pass_selection))
+        return self.adjust_model(x) + passforward
 
 class JointLoss(nn.Module):
     def __init__(self):
@@ -467,7 +485,7 @@ class JointLoss(nn.Module):
             # compute loss
             # eq_loss = torch.sum(torch.mul(weight, torch.mean(torch.abs(points_1_vec - points_2_vec),0) ))
             eq_loss = torch.sum(torch.mul(weight, torch.mean(torch.pow(points_1_vec - points_2_vec,2),0) ))
-            num_valid_eq += judgements_eq.size(0) 
+            num_valid_eq += torch.sum(weight)
 
         # compute inequality annotations
         if judgements_ineq.size(1) > 2:
@@ -507,10 +525,10 @@ class JointLoss(nn.Module):
             ineq_loss = torch.sum(torch.mul(weight, torch.pow( relu_layer(points_2_vec - points_1_vec + tau),2)  ) )
             # ineq_loss = torch.sum(torch.mul(weight, torch.pow(relu_layer(tau - points_1_vec/points_2_vec),2)))
 
-            num_included = torch.sum( torch.ge(points_2_vec.data - points_1_vec.data, -tau).float().cuda() )
+            #num_included = torch.sum( torch.ge(points_2_vec.data - points_1_vec.data, -tau).float().cuda() )
             # num_included = torch.sum(torch.ge(points_2_vec.data/points_1_vec.data, 1./tau).float().cuda())
 
-            num_valid_ineq += judgements_ineq.size(0)
+            num_valid_ineq += torch.sum(weight)
             #num_valid_ineq += num_included
 
         # avoid divide by zero 
@@ -700,7 +718,7 @@ class JointLoss(nn.Module):
         num_valid = torch.sum( mask )
 
         diff = torch.mul(mask, torch.pow(prediction_n - gt,2))
-        return torch.sum(diff)/num_valid
+        return torch.sum(diff)/(num_valid + 1e-8)
 
     def HuberLoss(self, prediction, mask, gt):
         tau = 1.0
@@ -1013,7 +1031,8 @@ class JointLoss(nn.Module):
         pred_vec = pred_vec.unsqueeze(1).float().cpu()
 
         if gt_vec.size(0) == 0:
-            return torch.tensor(0)
+            #return torch.tensor(0)
+            return torch.tensor(0).type_as(prediction)
 
         scale, _ = torch.gels(gt_vec.data, pred_vec.data)
         scale = scale[0,0]
@@ -1251,26 +1270,14 @@ class JointLoss(nn.Module):
             gt_R = Variable(targets['gt_R'].cuda(), requires_grad = False)
             gt_S = Variable(targets['gt_S'].cuda(), requires_grad = False)
 
-            R_loss = 0
-            S_loss = 0
-            for i in range(0, gt_R.size(0)):
-                R_loss += lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_R[i].unsqueeze(0)), gt_R[i].unsqueeze(0), mask_R[i].unsqueeze(0), .5)
-                S_loss += lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_S[i].unsqueeze(0)), gt_S[i].unsqueeze(0), mask_S[i].unsqueeze(0), .5)
-
-
-            #R_loss = lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_R), gt_R, mask_R, 0.5)            
+            R_loss = lambda_CG *self.LinearScaleInvarianceFramework(torch.exp(prediction_R), gt_R, mask_R, 0.5)
+            S_loss = lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_S), gt_S, mask_S, 0.5)
 
             # using ScaleInvarianceFramework might achieve better performance if we train on both IIW and SAW,
             # but LinearScaleInvarianceFramework could produce better perforamnce if trained on CGIntrinsics only
 
-            #S_loss = lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_S), gt_S, mask_S, 0.5)
-            # S_loss = lambda_CG * self.ScaleInvarianceFramework(prediction_S, torch.log(gt_S), mask_S, 0.5)  
-
             reconstr_loss = lambda_CG  * self.w_reconstr * self.SUNCGReconstLoss(torch.exp(prediction_R), torch.exp(prediction_S), mask_img, targets)
 
-            # print("R_loss ", R_loss.data[0])
-            # print("S_loss ", S_loss.data[0])
-            # print("reconstr_loss ", reconstr_loss.data[0])
 
             total_loss = R_loss + S_loss + reconstr_loss
 
@@ -1286,16 +1293,15 @@ class JointLoss(nn.Module):
             gt_R = Variable(targets['gt_R'].cuda(), requires_grad = False)
             gt_S = Variable(targets['gt_S'].cuda(), requires_grad = False)
 
-            R_loss = lambda_CG *self.LinearScaleInvarianceFramework(torch.exp(prediction_R), gt_R, mask_R, 0.5)            
+            R_loss = lambda_CG *self.LinearScaleInvarianceFramework(torch.exp(prediction_R), gt_R, mask_R, 0.5)
+            S_loss = lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_S), gt_S, mask_S, 0.5)
 
             # using ScaleInvarianceFramework might achieve better performance if we train on both IIW and SAW,
             # but LinearScaleInvarianceFramework could produce better perforamnce if trained on CGIntrinsics only
-            S_loss = lambda_CG * self.LinearScaleInvarianceFramework(torch.exp(prediction_S), gt_S, mask_S, 0.5)
-            # S_loss = lambda_CG * self.ScaleInvarianceFramework(prediction_S, torch.log(gt_S), mask_S, 0.5)  
 
             reconstr_loss = lambda_CG  * self.w_reconstr * self.SUNCGReconstLoss(torch.exp(prediction_R), torch.exp(prediction_S), mask_img, targets)
-            
-            # Why put this? Because some ground truth shadings are nosiy 
+
+            # Why put this? Because some ground truth shadings are nosiy
             Ss_loss = lambda_CG * self.w_ss_dense *  self.BilateralRefSmoothnessLoss(prediction_S, targets, 'S', 2)
 
             total_iiw_loss = 0

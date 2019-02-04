@@ -59,7 +59,8 @@ class Intrinsics_Model(BaseModel):
         self.human_judgement_gray = opt.human_judgement_gray
 
         if opt.human_judgement_gray:
-            rgb_to_human_gray = nn.Sequential(nn.Conv2d(3, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 1, kernel_size=1))
+            rgb_to_human_gray = networks.define_HumanJudgement(3, opt.human_judgement_model)
+            #rgb_to_human_gray = nn.Sequential(nn.Conv2d(3, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 1, kernel_size=1))
 
             if len(opt.gpu_ids) > 0:
                 rgb_to_human_gray.cuda(opt.gpu_ids[0])
