@@ -55,6 +55,8 @@ outp = test_iiw(model, 'train_val_list/val_list/')
 with open('val_whdr.txt','a') as f:
     f.write('WHDR {}\n'.format(outp[0]))
 print 'WHDR {}'.format(outp[0])
+print 'WHDR_EQ {}'.format(outp[1])
+print 'WHDR_INEQ {}'.format(outp[2])
 #for WHDR, WHDR_EQ, WHDR_INEQ in outp:
 #    print('WHDR %f'%WHDR)
 

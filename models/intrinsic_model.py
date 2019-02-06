@@ -47,10 +47,13 @@ class Intrinsics_Model(BaseModel):
 
         # define tensors
         print("LOAD Unet pix2pix version")
-        if opt.human_judgement_gray:
-            output_nc = 3
+        output_nc = opt.output_reflectance_dim
+        if opt.human_judgement_gray or opt.human_pair_classifier:
+            if output_nc == -1:
+                output_nc = 3
         else:
-            output_nc = 1
+            if output_nc == -1:
+                output_nc = 1
         g_model = networks.define_G(opt.input_nc, output_nc, opt.ngf,
                                         opt.which_model_netG, 'batch', opt.use_dropout, self.gpu_ids)
         model = WrapperModel()
@@ -59,12 +62,19 @@ class Intrinsics_Model(BaseModel):
         self.human_judgement_gray = opt.human_judgement_gray
 
         if opt.human_judgement_gray:
-            rgb_to_human_gray = networks.define_HumanJudgement(3, opt.human_judgement_model)
+            rgb_to_human_gray = networks.define_HumanJudgement(output_nc, opt.human_judgement_model)
             #rgb_to_human_gray = nn.Sequential(nn.Conv2d(3, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 1, kernel_size=1))
 
             if len(opt.gpu_ids) > 0:
                 rgb_to_human_gray.cuda(opt.gpu_ids[0])
             model.rgb_to_human_gray = rgb_to_human_gray
+
+        if opt.human_pair_classifier:
+            model.hpc = networks.HumanPairClassifier(output_nc)
+            if len(opt.gpu_ids) > 0:
+                model.hpc.cuda(opt.gpu_ids[0])
+        else:
+            model.hpc = None
 
         self.netG = model
 
@@ -83,6 +93,7 @@ class Intrinsics_Model(BaseModel):
 
         # if self.isTrain:
         self.criterion_joint = networks.JointLoss()
+        self.criterion_joint.HumanPairClassifier = model.hpc
         # initialize optimizers
 
         print('---------- Networks initialized -------------')
@@ -109,7 +120,7 @@ class Intrinsics_Model(BaseModel):
 
             prediction_R = prediction_R_raw[:,0,:,:].unsqueeze(1)
         else:
-            prediction_R = prediction_R_raw
+            prediction_R = prediction_R_raw[:,0,:,:].unsqueeze(1)
             prediction_R_human = prediction_R_raw
 
         return prediction_R, prediction_R_human, prediction_S
@@ -155,7 +166,10 @@ class Intrinsics_Model(BaseModel):
             judgements_eq = self.targets["eq_mat"][i]
             judgements_ineq = self.targets["ineq_mat"][i]
             random_filp = self.targets["random_filp"][i]
-            total_iiw_loss += self.criterion_joint.BatchRankingLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp).item()
+            if self.criterion_joint.HumanPairClassifier is not None:
+                total_iiw_loss += self.criterion_joint.BatchHumanClassifierLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.criterion_joint.HumanPairClassifier).item()
+            else:
+                total_iiw_loss += self.criterion_joint.BatchRankingLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp).item()
 
         return total_iiw_loss
 
@@ -169,7 +183,10 @@ class Intrinsics_Model(BaseModel):
                 judgements_eq = self.targets["eq_mat"][i]
                 judgements_ineq = self.targets["ineq_mat"][i]
                 random_filp = self.targets["random_filp"][i]
-                total_iiw_loss += self.criterion_joint.BatchRankingLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp).item()
+                if self.criterion_joint.HumanPairClassifier is not None:
+                    total_iiw_loss += self.criterion_joint.BatchHumanClassifierLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.criterion_joint.HumanPairClassifier).item()
+                else:
+                    total_iiw_loss += self.criterion_joint.BatchRankingLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp).item()
             return total_iiw_loss
         elif data_set_name == 'CGIntrinsics':
             total_loss = 0
@@ -196,7 +213,7 @@ class Intrinsics_Model(BaseModel):
         input_images = Variable(input_.cuda() , requires_grad = False)
         prediction_R, prediction_R_human, prediction_S = self.forward_eval(input_images)
 
-        return self.criterion_joint.evaluate_WHDR(prediction_R_human, targets, threshold)
+        return self.criterion_joint.evaluate_WHDR(prediction_R_human, targets, threshold, self.netG.hpc)
 
     def get_output_images(self, input_):
         input_images = Variable(input_.cuda() , requires_grad = False)
