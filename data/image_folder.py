@@ -52,7 +52,7 @@ def srgb_to_rgb(srgb):
 def rgb_to_chromaticity(rgb):
     """ converts rgb to chromaticity """
     irg = np.zeros_like(rgb)
-    s = np.sum(rgb, axis=-1) + 1e-6
+    s = np.mean(rgb, axis=-1) + 1e-6
 
     irg[..., 0] = rgb[..., 0] / s
     irg[..., 1] = rgb[..., 1] / s
