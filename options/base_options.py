@@ -41,7 +41,9 @@ class BaseOptions(object):
         self.parser.add_argument('--human_judgement_gray', action='store_true', help='treat the physical and human judgement as two different projections of the true RGB reflectance image, rather than the same grayscale image')
         self.parser.add_argument('--human_judgement_model', type=str, default='mlp', help='simple, mlp, or residual, must also set human_judgement_gray')
         self.parser.add_argument('--human_pair_classifier', action='store_true', help='rather than using image ratios, use a small MLP to predict which pixel is brighter')
+        self.parser.add_argument('--human_pair_classifier_type', type=str, default='ternary', help='ternary or binary')
         self.parser.add_argument('--output_reflectance_dim', type=int, default=-1)
+        self.parser.add_argument('--append_chroma', action='store_true')
 
         self.initialized = True
 

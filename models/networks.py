@@ -143,9 +143,13 @@ class ResidualNetwork(nn.Module):
         return self.adjust_model(x) + passforward
 
 class HumanPairClassifier(nn.Module):
-    def __init__(self, in_dim):
+    def __init__(self, in_dim, model_type):
         super(HumanPairClassifier, self).__init__()
-        self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16,3))
+        self.model_type = model_type
+        if model_type == 'ternary':
+            self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16, 3))
+        elif model_type == 'binary':
+            self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16, 2))
 
     def forward(self, X):
         return self.model(X)
@@ -444,6 +448,102 @@ class JointLoss(nn.Module):
 
         # avoid divide by zero 
         return eq_loss/(num_valid_eq + 1e-8) +  ineq_loss/(num_valid_ineq + 1e-8)
+
+    def BatchHumanBinaryClassifierLoss(self, prediction_R, judgements_eq, judgements_ineq, random_filp, human_pair_classifier):
+        # human_pair_classifier should return two binary classifiers.  0th for "is equal" and 1st for "left or right"
+        ce_loss = nn.CrossEntropyLoss(reduction='none')
+        ce_loss.cuda()
+
+        bce_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
+        bce_loss.cuda()
+
+        eq_loss, ineq_eq_loss, ineq_pr_loss = 0, 0, 0
+        num_valid_eq = 0
+        num_valid_ineq = 0
+
+        rows = prediction_R.size(1)
+        cols = prediction_R.size(2)
+        num_channel = prediction_R.size(0)
+
+        R_vec = prediction_R.view(num_channel, -1)
+
+        points_1_vec = []
+        points_2_vec = []
+        gts = []
+        weights = []
+        # Collect equality annotations
+        if judgements_eq.size(1) > 2:
+            judgements_eq = judgements_eq.cuda()
+
+            y_1 = torch.floor(judgements_eq[:,0] * rows).long()
+            y_2 = torch.floor(judgements_eq[:,2] * rows).long()
+
+            if random_filp:
+                x_1 = cols - 1 - torch.floor(judgements_eq[:,1] * cols).long()
+                x_2 = cols - 1 - torch.floor(judgements_eq[:,3] * cols).long()
+            else:
+                x_1 = torch.floor(judgements_eq[:,1] * cols).long()
+                x_2 = torch.floor(judgements_eq[:,3] * cols).long()
+
+            point_1_idx_linear = y_1 * cols + x_1
+            point_2_idx_linear = y_2 * cols + x_2
+
+            sel = torch.rand(point_1_idx_linear.shape).ge(.5).cuda()
+
+            p1 = torch.cat([torch.masked_select(point_1_idx_linear, sel), torch.masked_select(point_2_idx_linear, 1-sel)],0)
+            p2 = torch.cat([torch.masked_select(point_2_idx_linear, sel), torch.masked_select(point_1_idx_linear, 1-sel)],0)
+
+            # extract all pairs of comparisions
+            points_1_vec = torch.index_select(R_vec, 1, Variable(p1, requires_grad = False))
+            points_2_vec = torch.index_select(R_vec, 1, Variable(p2, requires_grad = False))
+
+            weight = Variable(judgements_eq[:,4], requires_grad = False)
+            weight = torch.cat([torch.masked_select(weight, sel), torch.masked_select(weight, 1-sel)], 0)
+
+            human_label = human_pair_classifier(torch.transpose(torch.cat([points_1_vec, points_2_vec], 0), 0, 1))
+            hl = human_label[:,0]
+            gt_eq = torch.ones(hl.shape).cuda()
+
+            eq_loss = torch.sum(weight * bce_loss(hl, gt_eq))
+            num_valid_eq = torch.sum(weight)
+
+        # collect inequality annotations
+        if judgements_ineq.size(1) > 2:
+            judgements_ineq = judgements_ineq.cuda()
+
+            y_1 = torch.floor(judgements_ineq[:,0] * rows).long()
+            y_2 = torch.floor(judgements_ineq[:,2] * rows).long()
+
+            if random_filp:
+                x_1 = cols - 1 - torch.floor(judgements_ineq[:,1] * cols).long()
+                x_2 = cols - 1 - torch.floor(judgements_ineq[:,3] * cols).long()
+            else:
+                x_1 = torch.floor(judgements_ineq[:,1] * cols).long()
+                x_2 = torch.floor(judgements_ineq[:,3] * cols).long()
+
+            point_1_idx_linear = y_1 * cols + x_1
+            point_2_idx_linear = y_2 * cols + x_2
+
+            sel = torch.rand(point_1_idx_linear.shape).ge(.5).cuda()
+
+            p1 = torch.cat([torch.masked_select(point_1_idx_linear, sel), torch.masked_select(point_2_idx_linear, 1-sel)],0)
+            p2 = torch.cat([torch.masked_select(point_2_idx_linear, sel), torch.masked_select(point_1_idx_linear, 1-sel)],0)
+
+            # extract all pairs of comparisions
+            points_1_vec = torch.index_select(R_vec, 1, Variable(p1, requires_grad = False))
+            points_2_vec = torch.index_select(R_vec, 1, Variable(p2, requires_grad = False))
+            weight = Variable(judgements_ineq[:,4], requires_grad = False)
+
+            ineq_pred = human_pair_classifier(torch.transpose(torch.cat([points_1_vec, points_2_vec], 0), 0, 1))
+            gt_ineq_eq = torch.zeros(ineq_pred.shape[0]).cuda()
+            gt_ineq_pr = torch.cat([torch.zeros(torch.sum(sel).item()), torch.ones(torch.sum(1-sel).item())]).cuda()
+
+            ineq_eq_loss = torch.sum(weight * bce_loss(ineq_pred[:,0], gt_ineq_eq))
+            ineq_pr_loss = torch.sum(weight * bce_loss(ineq_pred[:,1], gt_ineq_pr))
+
+            num_valid_ineq = torch.sum(weight)
+
+        return .5 * ((eq_loss + ineq_eq_loss) / (num_valid_eq + num_valid_ineq + 1e-8) + ineq_pr_loss / (num_valid_ineq + 1e-8))
 
     def BatchHumanClassifierLoss(self, prediction_R, judgements_eq, judgements_ineq, random_filp, human_pair_classifier):
         ce_loss = nn.CrossEntropyLoss(reduction='none')
@@ -839,158 +939,6 @@ class JointLoss(nn.Module):
         final_loss = (L2_loss + L1_loss)/num_valid
         return final_loss
 
-    # def DirectFramework(self, input_images, prediction_R, prediction_S, targets, epoch):
-    #     # downsample all the images
-    #     prediction_R_1 = prediction_R[:,:,::2,::2]
-    #     prediction_R_2 = prediction_R_1[:,:,::2,::2]
-    #     prediction_R_3 = prediction_R_2[:,:,::2,::2]
-    #     mask_0 = Variable(targets['mask'].cuda(), requires_grad = False)
-    #     mask_0 = mask_0[:,0,:,:].unsqueeze(1)
-    #     mask_1 = mask_0[:,:,::2,::2]
-    #     mask_2 = mask_1[:,:,::2,::2]
-    #     mask_3 = mask_2[:,:,::2,::2]
-
-    #     R_gt_0 = Variable(targets['gt_R'].cuda(), requires_grad = False)
-    #     R_gt_1 = R_gt_0[:,:,::2,::2]
-    #     R_gt_2 = R_gt_1[:,:,::2,::2]
-    #     R_gt_3 = R_gt_2[:,:,::2,::2]
-
-    #     S_gt_0 = Variable(targets['gt_S'].cuda(), requires_grad = False)
-    #     S_gt_1 = S_gt_0[:,:,::2,::2]
-    #     S_gt_2 = S_gt_1[:,:,::2,::2]
-    #     S_gt_3 = S_gt_2[:,:,::2,::2]        
-
-    #     # gt_normal = Variable(targets['normal'].cuda(), requires_grad = False)
-
-    #     prediction_S_1 = prediction_S[:,:,::2,::2]
-    #     prediction_S_2 = prediction_S_1[:,:,::2,::2]
-    #     prediction_S_3 = prediction_S_2[:,:,::2,::2]
-
-    #     # R L2 loss
-    #     w_data = 1.0
-    #     w_grad = 0.5
-    #     R_loss = w_data * self.L2Loss(prediction_R, mask_0, R_gt_0) 
-    #     R_loss += w_grad * self.L1GradientMatchingLoss(prediction_R , mask_0, R_gt_0) 
-    #     R_loss += w_grad * self.L1GradientMatchingLoss(prediction_R_1, mask_1, R_gt_1)
-    #     R_loss += w_grad * self.L1GradientMatchingLoss(prediction_R_2, mask_2, R_gt_2)
-    #     R_loss += w_grad * self.L1GradientMatchingLoss(prediction_R_3, mask_3, R_gt_3)
-        
-    #     S_mask_0 = mask_0[:,0,:,:].unsqueeze(1)
-    #     S_mask_1 = mask_1[:,0,:,:].unsqueeze(1)
-    #     S_mask_2 = mask_2[:,0,:,:].unsqueeze(1)
-    #     S_mask_3 = mask_3[:,0,:,:].unsqueeze(1)
-
-    #     # S Huber Loss
-    #     S_loss = w_data * self.HuberLoss(prediction_S, S_mask_0, S_gt_0) 
-    #     S_loss += w_grad * self.L1GradientMatchingLoss(prediction_S , S_mask_0, S_gt_0) 
-    #     S_loss += w_grad * self.L1GradientMatchingLoss(prediction_S_1, S_mask_1, S_gt_1)
-    #     S_loss += w_grad * self.L1GradientMatchingLoss(prediction_S_2, S_mask_2, S_gt_2)
-    #     S_loss += w_grad * self.L1GradientMatchingLoss(prediction_S_3, S_mask_3, S_gt_3)
-        
-    #     Reconstr_loss = 2.0 * self.SUNCGReconstLoss(input_images, prediction_R, prediction_S, mask_0, targets)
-    #     # Ls_loss = 8.0 * self.BilateralRefSmoothnessLoss(prediction_L, targets, 'S', 2)
-
-    #     print("R_loss", R_loss.data[0])
-    #     print("S_loss", S_loss.data[0])
-    #     # print("Reconstr_loss", Reconstr_loss.data[0])
-    #     # print("Lighting Loss", Ls_loss.data[0])
-    #     total_loss = R_loss + S_loss + Reconstr_loss 
-    #     return total_loss
-
-
-    # def ScaleInvarianceFramework(self, input_images, prediction_R, prediction_S, targets, epoch):
-    #     prediction_R_1 = prediction_R[:,:,::2,::2]
-    #     prediction_R_2 = prediction_R_1[:,:,::2,::2]
-    #     prediction_R_3 = prediction_R_2[:,:,::2,::2]
-
-    #     # downsample all the images
-    #     mask_0 = Variable(targets['mask'].cuda(), requires_grad = False)
-    #     mask_0 = mask_0[:,0,:,:].unsqueeze(1)
-    #     mask_1 = mask_0[:,:,::2,::2]
-    #     mask_2 = mask_1[:,:,::2,::2]
-    #     mask_3 = mask_2[:,:,::2,::2]
-
-    #     R_gt_0 = torch.log(Variable(targets['gt_R'].cuda(), requires_grad = False))
-    #     R_gt_1 = R_gt_0[:,:,::2,::2]
-    #     R_gt_2 = R_gt_1[:,:,::2,::2]
-    #     R_gt_3 = R_gt_2[:,:,::2,::2]
-
-    #     S_gt_0 = torch.log(Variable(targets['gt_S'].cuda(), requires_grad = False))
-    #     S_gt_1 = S_gt_0[:,:,::2,::2]
-    #     S_gt_2 = S_gt_1[:,:,::2,::2]
-    #     S_gt_3 = S_gt_2[:,:,::2,::2]
-    #     # end of downsample
-        
-
-    #     w_data = 1.0
-    #     w_grad = 0.5
-    #     R_loss = w_data * self.Data_Loss(prediction_R, mask_0, R_gt_0) 
-    #     R_loss += w_grad * self.L1GradientMatchingLoss(prediction_R , mask_0, R_gt_0) 
-    #     R_loss += w_grad * self.L1GradientMatchingLoss(prediction_R_1, mask_1, R_gt_1)
-    #     R_loss += w_grad * self.L1GradientMatchingLoss(prediction_R_2, mask_2, R_gt_2)
-    #     R_loss += w_grad * self.L1GradientMatchingLoss(prediction_R_3, mask_3, R_gt_3)
-
-    #     S_mask_0 = mask_0[:,0,:,:].unsqueeze(1)
-    #     S_mask_1 = mask_1[:,0,:,:].unsqueeze(1)
-    #     S_mask_2 = mask_2[:,0,:,:].unsqueeze(1)
-    #     S_mask_3 = mask_3[:,0,:,:].unsqueeze(1)
-
-    #     prediction_S_1 = prediction_S[:,:,::2,::2]
-    #     prediction_S_2 = prediction_S_1[:,:,::2,::2]
-    #     prediction_S_3 = prediction_S_2[:,:,::2,::2]            
-        
-    #     S_loss = w_data * self.Data_Loss(prediction_S, S_mask_0, S_gt_0) 
-    #     S_loss += w_grad * self.L1GradientMatchingLoss(prediction_S , S_mask_0, S_gt_0) 
-    #     S_loss += w_grad * self.L1GradientMatchingLoss(prediction_S_1, S_mask_1, S_gt_1)
-    #     S_loss += w_grad * self.L1GradientMatchingLoss(prediction_S_2, S_mask_2, S_gt_2)
-    #     S_loss += w_grad * self.L1GradientMatchingLoss(prediction_S_3, S_mask_3, S_gt_3)
-    #     # S_loss += 2.0 * self. (prediction_S, targets, 'S', 2)
-
-    #     Reconstr_loss = self.SUNCGReconstLoss(input_images, torch.exp(prediction_R), torch.exp(prediction_S), mask_0, targets)
-
-    #     # # lighting smoothness loss
-    #     # Ls_loss = 32.0 * self.LocalLightingSmoothenessLoss(prediction_L, targets)
-    #     # Ls_loss = 8.0 * self.BilateralRefSmoothnessLoss(prediction_L, targets, 'S', 2)
-        
-    #     print("Reconstr_loss", Reconstr_loss.data[0])
-    #     print("R_loss", R_loss.data[0])
-    #     print("S_loss", S_loss.data[0])
-    #     # print("Lighting Loss", Ls_loss.data[0])
-
-    #     total_loss = R_loss + S_loss + Reconstr_loss #+ Ls_loss
-    #     return total_loss
-
-    # def NormalShadingSmoothnessLoss(self, S, targets, scale_idx):
-    #     h = S.size(2)
-    #     w = S.size(3)
-    #     num_c = S.size(1)
-
-    #     half_window_size = 1
-    #     total_loss = Variable(torch.cuda.FloatTensor(1))
-    #     total_loss[0] = 0
-
-    #     # mask_center = M[:,:,half_window_size + self.Y[half_window_size,half_window_size]:h-half_window_size + self.Y[half_window_size,half_window_size], \
-    #                     # half_window_size + self.X[half_window_size,half_window_size]:w-half_window_size + self.X[half_window_size,half_window_size]]
-
-    #     S_center = S[:,:,half_window_size + self.Y[half_window_size,half_window_size]:h-half_window_size + self.Y[half_window_size,half_window_size], \
-    #                      half_window_size + self.X[half_window_size,half_window_size]:w-half_window_size + self.X[half_window_size,half_window_size] ]
-
-    #     c_idx = 0
-
-    #     for k in range(0,half_window_size*2+1):
-    #         for l in range(0,half_window_size*2+1):
-    #             normal_weights = targets["s_w_"+str(scale_idx)][:,c_idx,:,:].unsqueeze(1).repeat(1,num_c,1,1).float().cuda()
-    #             S_N = S[:,:,half_window_size + self.Y[k,l]:h- half_window_size + self.Y[k,l], half_window_size + self.X[k,l]: w-half_window_size + self.X[k,l] ]
-    #             # mask_N = M[:,:,half_window_size + self.Y[k,l]:h- half_window_size + self.Y[k,l], half_window_size + self.X[k,l]: w-half_window_size + self.X[k,l] ]
-    #             # composed_M = torch.mul(mask_N, mask_center)
-    #             # normal_weights = torch.mul(normal_weights, composed_M)
-    #             r_diff = torch.mul( Variable(normal_weights, requires_grad = False), torch.pow(S_center - S_N, 2)  )  
-    #             total_loss  = total_loss + torch.mean(r_diff)
-    #             c_idx = c_idx + 1
-
-
-    #     return total_loss/(8.0 * num_c)
-
     def CCLoss(self, prediction_S, saw_mask, gts, num_cc):
         diff = prediction_S - gts
         total_loss = Variable(torch.cuda.FloatTensor(1))
@@ -1352,7 +1300,10 @@ class JointLoss(nn.Module):
                 judgements_ineq = targets["ineq_mat"][i]
                 random_filp = targets["random_filp"][i]
                 if self.HumanPairClassifier is not None:
-                    total_iiw_loss += self.w_IIW * self.BatchHumanClassifierLoss(prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.HumanPairClassifier)
+                    if self.HumanPairClassifier.model_type == 'ternary':
+                        total_iiw_loss += self.w_IIW * self.BatchHumanClassifierLoss(prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.HumanPairClassifier)
+                    elif self.HumanPairClassifier.model_type == 'binary':
+                        total_iiw_loss += self.w_IIW * self.BatchHumanBinaryClassifierLoss(prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.HumanPairClassifier)
                 else:
                     total_iiw_loss += self.w_IIW * self.BatchRankingLoss(prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp)
             total_iiw_loss = (total_iiw_loss)/num_images
@@ -1460,7 +1411,7 @@ class JointLoss(nn.Module):
 
         return total_loss.data.item()
 
-    def compute_whdr_classifier(self, reflectance, judgements, human_classifier):
+    def compute_whdr_classifier(self, reflectance, judgements, human_classifier, eq_threshold = 0):
         points = judgements['intrinsic_points']
         comparisons = judgements['intrinsic_comparisons']
         id_to_points = {p['id']: p for p in points}
@@ -1493,15 +1444,27 @@ class JointLoss(nn.Module):
             # convert to grayscale and threshold
             p1 = torch.Tensor(reflectance[int(point1['y'] * rows), int(point1['x'] * cols), ...]).cuda()
             p2 = torch.Tensor(reflectance[int(point2['y'] * rows), int(point2['x'] * cols), ...]).cuda()
-            res_log_prob = human_classifier(torch.cat([p1, p2]).unsqueeze(0))
-            res_sel = res_log_prob.argmax(1)
 
-            if res_sel.item() == 0:
-                alg_darker = 'E'
-            elif res_sel.item() == 2:
-                alg_darker = '1'
-            else:
-                alg_darker = '2'
+            if human_classifier.model_type == 'ternary':
+                res_log_prob = human_classifier(torch.cat([p1, p2]).unsqueeze(0))
+                res_sel = res_log_prob.argmax(1)
+
+                if res_sel.item() == 0:
+                    alg_darker = 'E'
+                elif res_sel.item() == 2:
+                    alg_darker = '1'
+                else:
+                    alg_darker = '2'
+            elif human_classifier.model_type == 'binary':
+                res_bin_prob = human_classifier(torch.cat([p1,p2]).unsqueeze(0))
+
+                if res_bin_prob[0,0] > eq_threshold:
+                    alg_darker = 'E'
+                else:
+                    if res_bin_prob[0,1] > 0:
+                        alg_darker = '1'
+                    else:
+                        alg_darker = '2'
 
             if darker == 'E':
                 if darker != alg_darker:
@@ -1627,7 +1590,15 @@ class JointLoss(nn.Module):
                     whdrs_eq.append(whdr_eq)
                     whdrs_ineq.append(whdr_ineq)
             else:
-                    whdr, whdr_eq, whdr_ineq = self.compute_whdr_classifier(prediction_R_np, judgements, human_classifier)
+                for t in thresholds:
+                    if t == 0:
+                        eq_threshold = -10000
+                    elif t == 1:
+                        eq_threshold = 10000
+                    else:
+                        eq_threshold = math.log(t/(1-t))
+
+                    whdr, whdr_eq, whdr_ineq = self.compute_whdr_classifier(prediction_R_np, judgements, human_classifier, eq_threshold)
                     whdrs.append(whdr)
                     whdrs_eq.append(whdr_eq)
                     whdrs_ineq.append(whdr_ineq)

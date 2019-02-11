@@ -41,6 +41,7 @@ class Intrinsics_Model(BaseModel):
         which_model_netG = "pix2pix"#"pix2pix"
 
         BaseModel.initialize(self, opt)
+        self.append_chroma = opt.append_chroma
         self.isTrain = opt.isTrain
         self.input = self.Tensor(opt.batchSize, opt.input_nc,
                                    opt.fineSize, opt.fineSize)
@@ -61,6 +62,9 @@ class Intrinsics_Model(BaseModel):
 
         self.human_judgement_gray = opt.human_judgement_gray
 
+        if self.append_chroma:
+            output_nc += 3
+
         if opt.human_judgement_gray:
             rgb_to_human_gray = networks.define_HumanJudgement(output_nc, opt.human_judgement_model)
             #rgb_to_human_gray = nn.Sequential(nn.Conv2d(3, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 8, kernel_size=1), nn.ReLU(False), nn.Conv2d(8, 1, kernel_size=1))
@@ -70,7 +74,8 @@ class Intrinsics_Model(BaseModel):
             model.rgb_to_human_gray = rgb_to_human_gray
 
         if opt.human_pair_classifier:
-            model.hpc = networks.HumanPairClassifier(output_nc)
+            model.hpc = networks.HumanPairClassifier(output_nc, opt.human_pair_classifier_type)
+
             if len(opt.gpu_ids) > 0:
                 model.hpc.cuda(opt.gpu_ids[0])
         else:
@@ -112,6 +117,9 @@ class Intrinsics_Model(BaseModel):
 
     def forward_eval(self, input_images):
         prediction_R_raw, prediction_S  = self.netG.g_model.forward(input_images)
+        if self.append_chroma:
+            chroma = input_images / torch.clamp(torch.mean(input_images,1,keepdim=True), min=1e-8, max=1.0)
+            prediction_R_raw = torch.cat([prediction_R_raw, chroma], 1)
         if self.human_judgement_gray:
             if self.gpu_ids and isinstance(prediction_R_raw, torch.cuda.FloatTensor):
                 prediction_R_human = nn.parallel.data_parallel(self.netG.rgb_to_human_gray, prediction_R_raw, self.gpu_ids)
@@ -122,6 +130,7 @@ class Intrinsics_Model(BaseModel):
         else:
             prediction_R = prediction_R_raw[:,0,:,:].unsqueeze(1)
             prediction_R_human = prediction_R_raw
+
 
         return prediction_R, prediction_R_human, prediction_S
 
@@ -184,7 +193,10 @@ class Intrinsics_Model(BaseModel):
                 judgements_ineq = self.targets["ineq_mat"][i]
                 random_filp = self.targets["random_filp"][i]
                 if self.criterion_joint.HumanPairClassifier is not None:
-                    total_iiw_loss += self.criterion_joint.BatchHumanClassifierLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.criterion_joint.HumanPairClassifier).item()
+                    if self.criterion_joint.HumanPairClassifier.model_type == 'ternary':
+                        total_iiw_loss += self.criterion_joint.BatchHumanClassifierLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.criterion_joint.HumanPairClassifier).item()
+                    elif self.criterion_joint.HumanPairClassifier.model_type == 'binary':
+                        total_iiw_loss += self.criterion_joint.BatchHumanBinaryClassifierLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.criterion_joint.HumanPairClassifier).item()
                 else:
                     total_iiw_loss += self.criterion_joint.BatchRankingLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp).item()
             return total_iiw_loss
