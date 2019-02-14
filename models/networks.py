@@ -50,28 +50,14 @@ def define_G(input_nc, output_nc, ngf, which_model_netG, norm='batch', use_dropo
     elif which_model_netG == 'unet_128':
         netG = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
     elif which_model_netG == 'unet_256':
-        # netG = SingleUnetGenerator_S(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
-        # netG = SingleUnetGenerator_R(input_nc, output_nc, 7, ngf, norm_layer=nn.BatchNorm2d, use_dropout=use_dropout, gpu_ids=gpu_ids, )
-        #output_nc = 3
-        # netG2 = SingleUnetGenerator_R2(input_nc, output_nc, 7, ngf, norm_layer=nn.BatchNorm2d, use_dropout=use_dropout, gpu_ids=gpu_ids)
-        # netG = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
         netG = MultiUnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
-        # output_nc_R = 3
-        # netR = SingleUnetGenerator_R(input_nc, output_nc_R, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
-        # output_nc_L = 3
-        # netL = SingleUnetGenerator_R(input_nc, output_nc_L, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
-
     else:
         print('Generator model name [%s] is not recognized' % which_model_netG)
 
     if len(gpu_ids) > 0:
         netG.cuda(gpu_ids[0])
-        # netR.cuda(gpu_ids[0])
-        # netL.cuda(gpu_ids[0])
 
     netG.apply(weights_init)
-    # netR.apply(weights_init)
-    # netL.apply(weights_init)
 
     return netG
 
@@ -230,13 +216,13 @@ class JointLoss(nn.Module):
         # grad_input = grad_input.zero_()
 
         for i in range(pred_R.size(0)): # for each image
-            B_mat = targets[att+'B_list'][i] # still list of blur sparse matrices 
+            B_mat = targets[att+'B_list'][i] # still list of blur sparse matrices
             S_mat = Variable(targets[att + 'S'][i].cuda(), requires_grad = False) # Splat and Slicing matrix
             n_vec = Variable(targets[att + 'N'][i].cuda(), requires_grad = False) # bi-stochatistic vector, which is diagonal matrix
 
             p = pred_R[i,:,:,:].view(pred_R.size(1),-1).t() # NX3
             # p'p
-            # p_norm = torch.mm(p.t(), p) 
+            # p_norm = torch.mm(p.t(), p)
             # p_norm_sum = torch.trace(p_norm)
             p_norm_sum = torch.sum(torch.mul(p,p))
 
@@ -253,8 +239,8 @@ class JointLoss(nn.Module):
                 B_var1 = Variable(B_mat[f].cuda(), requires_grad = False)
                 sp_mm1 = Sparse()
                 Snp_1 = sp_mm1(Snp_1, B_var1)
-                
-                B_var2 = Variable(B_mat[num_features-f].cuda(), requires_grad = False)               
+
+                B_var2 = Variable(B_mat[num_features-f].cuda(), requires_grad = False)
                 sp_mm2 = Sparse()
                 Snp_2 = sp_mm2(Snp_2, B_var2)
 
@@ -264,7 +250,7 @@ class JointLoss(nn.Module):
 
             total_loss = total_loss + ((p_norm_sum - pAp)/Z)
 
-        total_loss = total_loss/pred_R.size(0) 
+        total_loss = total_loss/pred_R.size(0)
         # average over all images
         return total_loss
 
@@ -281,7 +267,7 @@ class JointLoss(nn.Module):
         S = S.repeat(1,3,1,1)
         rgb_img = Variable(targets['rgb_img'].cuda(), requires_grad = False)
 
-        # 1 channel 
+        # 1 channel
         chromaticity = Variable(targets['chromaticity'].cuda(), requires_grad = False)
         p_R = torch.mul(chromaticity, R.repeat(1,3,1,1))
 
@@ -302,7 +288,7 @@ class JointLoss(nn.Module):
 
         num_valid_comparisons = 0
 
-        num_valid_comparisons_ineq =0 
+        num_valid_comparisons_ineq =0
         num_valid_comparisons_eq = 0
 
         total_loss_eq = Variable(torch.cuda.FloatTensor(1))
@@ -343,7 +329,7 @@ class JointLoss(nn.Module):
             # print("===============================================================")
             # l2 > l1, l2 is brighter
             # if darker == '1' and ((l1_m.data[0] / l2_m.data[0]) > 1.0/tau):
-            #     # loss =0 
+            #     # loss =0
             #     loss =  weight * torch.mean((tau -  (l2_m / l1_m)))
             #     num_valid_comparisons += 1
             # # l1 > l2, l1 is brighter
@@ -351,14 +337,14 @@ class JointLoss(nn.Module):
             #     # loss =0
             #     loss =  weight * torch.mean((tau -  (l1_m / l2_m)))
             #     num_valid_comparisons += 1
-            # # is equal 
+            # # is equal
             # elif darker == 'E':
             #     loss =  weight * torch.mean(torch.abs(l2 - l1))
             #     num_valid_comparisons += 1
             # else:
             #     loss = 0.0
 
-            # l2 is brighter 
+            # l2 is brighter
             if darker == '1' and ((l1_m.data[0] - l2_m.data[0]) > - tau):
                 # print("dark 1", l1_m.data[0] - l2_m.data[0])
                 total_loss_ineq +=  weight * torch.mean( torch.pow( tau -  (l2_m - l1_m), 2)   )
@@ -395,7 +381,7 @@ class JointLoss(nn.Module):
         cols = prediction_R.size(2)
         num_channel = prediction_R.size(0)
 
-        # evaluate equality annotations densely 
+        # evaluate equality annotations densely
         if judgements_eq.size(1) > 2:
             judgements_eq = judgements_eq.cuda()
             R_vec = prediction_R.view(num_channel, -1)
@@ -435,12 +421,12 @@ class JointLoss(nn.Module):
             # eq_loss = torch.sum(torch.mul(weight, torch.mean(torch.abs(points_1_vec - points_2_vec),0) ))
 
             eq_loss = torch.sum(torch.mul(weight, torch.mean(torch.pow(points_1_vec - points_2_vec,2),0) ))
-            num_valid_eq += judgements_eq.size(0) 
+            num_valid_eq += judgements_eq.size(0)
 
         # compute inequality annotations
         if judgements_ineq.size(1) > 2:
             judgements_ineq = judgements_ineq.cuda()
-            R_intensity = torch.mean(prediction_R, 0)   
+            R_intensity = torch.mean(prediction_R, 0)
             # R_intensity = torch.log(R_intensity)
             R_vec_mean = R_intensity.view(1, -1)
 
@@ -469,7 +455,7 @@ class JointLoss(nn.Module):
             weight = Variable(judgements_ineq[:,4], requires_grad = False)
 
             # point 2 should be always darker than (<) point 1
-            # compute loss 
+            # compute loss
             relu_layer = nn.ReLU(True)
             # ineq_loss = torch.sum(torch.mul(weight, relu_layer(points_2_vec - points_1_vec + tau) ) )
             ineq_loss = torch.sum(torch.mul(weight, torch.pow( relu_layer(points_2_vec - points_1_vec + tau),2)  ) )
@@ -480,7 +466,7 @@ class JointLoss(nn.Module):
 
             num_valid_ineq += num_included
 
-        # avoid divide by zero 
+        # avoid divide by zero
         return eq_loss/(num_valid_eq + 1e-8) +  ineq_loss/(num_valid_ineq + 1e-8)
 
     def BatchHumanBinaryClassifierLoss(self, prediction_R, judgements_eq, judgements_ineq, random_filp, human_pair_classifier):
@@ -611,7 +597,7 @@ class JointLoss(nn.Module):
             num_valid_ineq = torch.sum(weight)
 
 
-        # avoid divide by zero 
+        # avoid divide by zero
         #print 'eq, ineq', eq_loss/(num_valid_eq + 1e-8), ineq_loss/(num_valid_ineq + 1e-8)
         # equal weight to eq, >, < for image
         return eq_loss/(num_valid_eq + 1e-8) +  2 * ineq_loss/(num_valid_ineq + 1e-8)
@@ -631,7 +617,7 @@ class JointLoss(nn.Module):
         cols = prediction_R.size(2)
         num_channel = prediction_R.size(0)
 
-        # evaluate equality annotations densely 
+        # evaluate equality annotations densely
         if judgements_eq.size(1) > 2:
             judgements_eq = judgements_eq.cuda()
             R_vec = prediction_R.view(num_channel, -1)
@@ -704,7 +690,7 @@ class JointLoss(nn.Module):
             weight = Variable(judgements_ineq[:,4], requires_grad = False)
 
             # point 2 should be always darker than (<) point 1
-            # compute loss 
+            # compute loss
             relu_layer = nn.ReLU(True)
             # ineq_loss = torch.sum(torch.mul(weight, relu_layer(points_2_vec - points_1_vec + tau) ) )
             ineq_loss = torch.sum(torch.mul(weight, torch.pow( relu_layer(points_2_vec - points_1_vec + tau),2)  ) )
@@ -716,18 +702,18 @@ class JointLoss(nn.Module):
             num_valid_ineq += torch.sum(weight)
             #num_valid_ineq += num_included
 
-        # avoid divide by zero 
+        # avoid divide by zero
         return eq_loss/(num_valid_eq + 1e-8) +  ineq_loss/(num_valid_ineq + 1e-8)
 
     def ShadingPenaltyLoss(self, S):
         return torch.mean(torch.pow(S - 0.5,2) )
         # return torch.sum( torch.mul(sky_mask, torch.abs(S - np.log(0.5))/num_val_pixels ))
-   
+
     def AngleLoss(self, prediction_n, targets):
         mask = Variable(targets['mask'].cuda(), requires_grad = False)
         normal = Variable(targets['normal'].cuda(), requires_grad = False)
         num_valid = torch.sum(mask[:,0,:,:])
-        # compute dot product 
+        # compute dot product
         angle_loss = - torch.sum( torch.mul(mask, torch.mul(prediction_n, normal)), 1)
         return 1 + torch.sum(angle_loss)/num_valid
 
@@ -735,14 +721,14 @@ class JointLoss(nn.Module):
     def GradientLoss(self, prediction_n, mask, gt_n):
         N = torch.sum(mask)
 
-        # horizontal angle difference 
+        # horizontal angle difference
         h_mask = torch.mul(mask[:,:,:,0:-2], mask[:,:,:,2:])
         h_gradient = prediction_n[:,:,:,0:-2] - prediction_n[:,:,:,2:]
         h_gradient_gt = gt_n[:,:,:,0:-2] -  gt_n[:,:,:,2:]
         h_gradient_loss = torch.mul(h_mask, torch.abs(h_gradient - h_gradient_gt))
 
 
-        # Vertical angle difference 
+        # Vertical angle difference
         v_mask = torch.mul(mask[:,:,0:-2,:], mask[:,:,2:,:])
         v_gradient = prediction_n[:,:,0:-2,:] -  prediction_n[:,:,2:,:]
         v_gradient_gt = gt_n[:,:,0:-2,:] - gt_n[:,:,2:,:]
@@ -753,16 +739,16 @@ class JointLoss(nn.Module):
         gradient_loss = gradient_loss/(N*2.0)
 
         return gradient_loss
-    
+
     def SmoothLoss(self, prediction_n, mask):
         N = torch.sum(mask[:,0,:,:])
 
-        # horizontal angle difference 
+        # horizontal angle difference
         h_mask = torch.mul(mask[:,:,:,0:-2], mask[:,:,:,2:])
         h_gradient = torch.sum( torch.mul(h_mask, torch.mul(prediction_n[:,:,:,0:-2], prediction_n[:,:,:,2:])), 1)
         h_gradient_loss = 1 - torch.sum(h_gradient)/N
 
-        # Vertical angle difference 
+        # Vertical angle difference
         v_mask = torch.mul(mask[:,:,0:-2,:], mask[:,:,2:,:])
         v_gradient = torch.sum( torch.mul(v_mask, torch.mul(prediction_n[:,:,0:-2,:], prediction_n[:,:,2:,:])), 1)
         v_gradient_loss = 1 - torch.sum(v_gradient)/N
@@ -802,16 +788,16 @@ class JointLoss(nn.Module):
         for k in range(0,half_window_size*2+1):
             for l in range(0,half_window_size*2+1):
                 # albedo_weights = Variable(targets["r_w_s"+str(scale_idx)][:,c_idx,:,:].unsqueeze(1).repeat(1,num_c,1,1).float().cuda(), requires_grad = False)
-                R_N = R[:,:,half_window_size + self.Y[k,l]:h- half_window_size + self.Y[k,l], 
+                R_N = R[:,:,half_window_size + self.Y[k,l]:h- half_window_size + self.Y[k,l],
                             half_window_size + self.X[k,l]: w-half_window_size + self.X[k,l] ]
-                mask_N = M[:,:,half_window_size + self.Y[k,l]:h- half_window_size + self.Y[k,l], 
+                mask_N = M[:,:,half_window_size + self.Y[k,l]:h- half_window_size + self.Y[k,l],
                                 half_window_size + self.X[k,l]: w-half_window_size + self.X[k,l] ]
 
                 composed_M = torch.mul(mask_N, mask_center)
 
                 # albedo_weights = torch.mul(albedo_weights, composed_M)
 
-                r_diff = torch.mul( composed_M, torch.pow(R_center - R_N,2)  )  
+                r_diff = torch.mul( composed_M, torch.pow(R_center - R_N,2)  )
                 total_loss  = total_loss + torch.mean(r_diff)
                 c_idx = c_idx + 1
 
@@ -840,21 +826,21 @@ class JointLoss(nn.Module):
                 # mask_N = M[:,:,half_window_size + self.Y[k,l]:h- half_window_size + self.Y[k,l], half_window_size + self.X[k,l]: w-half_window_size + self.X[k,l] ]
                 # composed_M = torch.mul(mask_N, mask_center)
                 # albedo_weights = torch.mul(albedo_weights, composed_M)
-                r_diff = torch.mul( Variable(albedo_weights, requires_grad = False), torch.abs(R_center - R_N)  )  
-                
+                r_diff = torch.mul( Variable(albedo_weights, requires_grad = False), torch.abs(R_center - R_N)  )
+
                 total_loss  = total_loss + torch.mean(r_diff)
                 c_idx = c_idx + 1
 
 
         return total_loss/(8.0 * num_c)
 
-   
+
     def Data_Loss(self, log_prediction, mask, log_gt):
         N = torch.sum(mask)
         log_diff = log_prediction - log_gt
         log_diff = torch.mul(log_diff, mask)
-        s1 = torch.sum( torch.pow(log_diff,2) )/N 
-        s2 = torch.pow(torch.sum(log_diff),2)/(N*N)  
+        s1 = torch.sum( torch.pow(log_diff,2) )/N
+        s2 = torch.pow(torch.sum(log_diff),2)/(N*N)
         data_loss = s1 - s2
         return data_loss
 
@@ -938,24 +924,24 @@ class JointLoss(nn.Module):
                 masked_log_diff = torch.mul(new_mask, log_diff)
                 N = torch.sum(new_mask)
 
-                s1 = torch.sum( torch.pow(masked_log_diff,2) )/N 
-                s2 = torch.pow(torch.sum(masked_log_diff),2)/(N*N)  
+                s1 = torch.sum( torch.pow(masked_log_diff,2) )/N
+                s2 = torch.pow(torch.sum(masked_log_diff),2)/(N*N)
                 total_loss += (s1 - s2)
-                num_regions +=1 
+                num_regions +=1
 
         return total_loss/(num_regions + 1e-6)
 
 
     def SAWLoss(self, prediction_S, targets):
-        # Shading smoothness ignore mask region 
+        # Shading smoothness ignore mask region
         lambda_1, lambda_2 = 0.1, 1.
 
         # saw_mask_0 = Variable(targets['saw_mask_0'].cuda(), requires_grad = False)
         # prediction_S_1 = prediction_S[:,:,::2,::2]
         # prediction_S_2 = prediction_S_1[:,:,::2,::2]
         # prediction_S_3 = prediction_S_2[:,:,::2,::2]
-        
-        # mask_0 = saw_mask_0        
+
+        # mask_0 = saw_mask_0
         # mask_1 = mask_0[:,:,::2,::2]
         # mask_2 = mask_1[:,:,::2,::2]
         # mask_3 = mask_2[:,:,::2,::2]
@@ -965,7 +951,7 @@ class JointLoss(nn.Module):
         # saw_loss_0 += self.w_ss_local * 0.333 * self.MaskLocalSmoothenessLoss(prediction_S_2, mask_2, targets)
         # saw_loss_0 += self.w_ss_local * 0.25 * self.MaskLocalSmoothenessLoss(prediction_S_3, mask_3, targets)
 
-        # shadow boundary 
+        # shadow boundary
         saw_mask_1 = Variable(targets['saw_mask_1'].cuda(), requires_grad = False)
         linear_I = torch.mean( Variable(targets['rgb_img'].cuda(), requires_grad = False),1)
         linear_I = linear_I.unsqueeze(1)
@@ -978,19 +964,19 @@ class JointLoss(nn.Module):
 
         # print(targets['num_mask_1'][0])
         # plt.figure()
-        # plt.imshow(mask_1, cmap='gray') 
+        # plt.imshow(mask_1, cmap='gray')
         # plt.show()  # display i
         # plt.figure()
-        # plt.imshow(linear_I, cmap='gray') 
+        # plt.imshow(linear_I, cmap='gray')
         # plt.show()  # display i
         # sys.exit()
 
         saw_loss_1 = lambda_1 * self.CCLoss(prediction_S, saw_mask_1, torch.log(linear_I), targets['num_mask_1'])
-        # smooth region 
+        # smooth region
         saw_mask_2 = Variable(targets['saw_mask_2'].cuda(), requires_grad = False)
         saw_loss_2 = lambda_2 * self.CCLoss(prediction_S, saw_mask_2, 0, targets['num_mask_2'])
 
-        # print("saw_loss_1 ", saw_loss_1.data[0])        
+        # print("saw_loss_1 ", saw_loss_1.data[0])
         # print("saw_loss_2 ", saw_loss_2.data[0])
 
         return saw_loss_2 + saw_loss_1
@@ -1000,7 +986,7 @@ class JointLoss(nn.Module):
 
         w_data = 1.0
         w_grad = 0.5
-        final_loss = w_data * self.L2Loss(prediction, mask, gt) 
+        final_loss = w_data * self.L2Loss(prediction, mask, gt)
 
         # level 0
         prediction_1 = prediction[:,:,::2,::2]
@@ -1015,7 +1001,7 @@ class JointLoss(nn.Module):
         gt_2 = gt_1[:,:,::2,::2]
         gt_3 = gt_2[:,:,::2,::2]
 
-        final_loss += w_grad * self.L1GradientMatchingLoss(prediction , mask, gt) 
+        final_loss += w_grad * self.L1GradientMatchingLoss(prediction , mask, gt)
         final_loss += w_grad * self.L1GradientMatchingLoss(prediction_1, mask_1, gt_1)
         final_loss += w_grad * self.L1GradientMatchingLoss(prediction_2, mask_2, gt_2)
         final_loss += w_grad * self.L1GradientMatchingLoss(prediction_3, mask_3, gt_3)
@@ -1029,8 +1015,8 @@ class JointLoss(nn.Module):
         assert(prediction.size(1) == mask.size(1))
 
         w_data = 1.0
-        final_loss = w_data * self.Data_Loss(prediction, mask, gt) 
-        final_loss += w_grad * self.L1GradientMatchingLoss(prediction , mask, gt) 
+        final_loss = w_data * self.Data_Loss(prediction, mask, gt)
+        final_loss += w_grad * self.L1GradientMatchingLoss(prediction , mask, gt)
 
         # level 0
         prediction_1 = prediction[:,:,::2,::2]
@@ -1073,7 +1059,7 @@ class JointLoss(nn.Module):
         # print("scale" , scale)
         # sys.exit()
         prediction_scaled = prediction * scale
-        final_loss = w_data * self.L2Loss(prediction_scaled, mask, gt) 
+        final_loss = w_data * self.L2Loss(prediction_scaled, mask, gt)
 
         prediction_1 = prediction_scaled[:,:,::2,::2]
         prediction_2 = prediction_1[:,:,::2,::2]
@@ -1087,7 +1073,7 @@ class JointLoss(nn.Module):
         gt_2 = gt_1[:,:,::2,::2]
         gt_3 = gt_2[:,:,::2,::2]
 
-        final_loss += w_grad * self.L1GradientMatchingLoss(prediction_scaled , mask, gt) 
+        final_loss += w_grad * self.L1GradientMatchingLoss(prediction_scaled , mask, gt)
         final_loss += w_grad * self.L1GradientMatchingLoss(prediction_1, mask_1, gt_1)
         final_loss += w_grad * self.L1GradientMatchingLoss(prediction_2, mask_2, gt_2)
         final_loss += w_grad * self.L1GradientMatchingLoss(prediction_3, mask_3, gt_3)
@@ -1114,11 +1100,11 @@ class JointLoss(nn.Module):
         scale = scale[0,0]
 
         prediction_scaled = prediction * scale
-        
+
         ones_matrix = Variable(torch.zeros(gt.size(0), gt.size(1), gt.size(2), gt.size(3)) + 1, requires_grad = False)
         weight = torch.min(1/gt,  ones_matrix.float().cuda())
         weight_mask = torch.mul(weight, mask)
-        
+
         final_loss = w_data * self.L2Loss(prediction_scaled, weight_mask, gt)
 
         prediction_1 = prediction_scaled[:,:,::2,::2]
@@ -1133,7 +1119,7 @@ class JointLoss(nn.Module):
         gt_2 = gt_1[:,:,::2,::2]
         gt_3 = gt_2[:,:,::2,::2]
 
-        final_loss += w_grad * self.L1GradientMatchingLoss(prediction_scaled , weight_mask, gt) 
+        final_loss += w_grad * self.L1GradientMatchingLoss(prediction_scaled , weight_mask, gt)
         final_loss += w_grad * self.L1GradientMatchingLoss(prediction_1, mask_1, gt_1)
         final_loss += w_grad * self.L1GradientMatchingLoss(prediction_2, mask_2, gt_2)
         final_loss += w_grad * self.L1GradientMatchingLoss(prediction_3, mask_3, gt_3)
@@ -1151,7 +1137,7 @@ class JointLoss(nn.Module):
         cols = prediction_R.size(2)
         num_channel = prediction_R.size(0)
 
-        # evaluate equality annotations densely 
+        # evaluate equality annotations densely
         if judgements_eq.size(1) > 2:
             judgements_eq = judgements_eq.cuda()
 
@@ -1219,7 +1205,7 @@ class JointLoss(nn.Module):
             points_2_vec = torch.index_select(R_vec_mean, 1, Variable(point_2_idx_linear, requires_grad = False)).squeeze(0)
 
             # point 2 should be always darker than (<) point 1
-            # compute loss 
+            # compute loss
             relu_layer = nn.ReLU(True)
             # ineq_loss = torch.sum(torch.mul(weight, relu_layer(points_2_vec - points_1_vec + tau) ) )
             ineq_loss = torch.sum(torch.pow( relu_layer(points_2_vec - points_1_vec + tau),2) )
@@ -1230,7 +1216,7 @@ class JointLoss(nn.Module):
             num_valid_ineq += judgements_ineq.size(0)
             #num_val_inex += num_included
 
-        # avoid divide by zero 
+        # avoid divide by zero
         return (eq_loss)/(num_valid_eq + 1e-8) + ineq_loss/(num_valid_ineq + 1e-8)
 
 
@@ -1353,7 +1339,7 @@ class JointLoss(nn.Module):
 
             for i in range(0, prediction_R.size(0)):
                 judgements_eq = targets["eq_mat"][i]
-                judgements_ineq = targets["ineq_mat"][i]   
+                judgements_ineq = targets["ineq_mat"][i]
                 random_filp = targets["random_filp"][i]
                 total_iiw_loss += lambda_CG * self.SUNCGBatchRankingLoss(prediction_R[i,:,:,:], judgements_eq, judgements_ineq)
 
@@ -1362,8 +1348,8 @@ class JointLoss(nn.Module):
             # print("R_loss ", R_loss.data[0])
             # print("S_loss ", S_loss.data[0])
             # print("reconstr_loss ", reconstr_loss.data[0])
-            # print("Ss_loss ", Ss_loss.data[0])            
-            # print("SUNCGBatchRankingLoss   ", total_iiw_loss.data[0])           
+            # print("Ss_loss ", Ss_loss.data[0])
+            # print("SUNCGBatchRankingLoss   ", total_iiw_loss.data[0])
 
             total_loss = R_loss + S_loss + reconstr_loss + Ss_loss + total_iiw_loss
 
@@ -1373,7 +1359,7 @@ class JointLoss(nn.Module):
             prediction_R_1 = prediction_R[:,:,::2,::2]
             prediction_R_2 = prediction_R_1[:,:,::2,::2]
             prediction_R_3 = prediction_R_2[:,:,::2,::2]
-            
+
             rs_loss = self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R, targets,0)
             rs_loss = rs_loss +  0.5 * self.w_rs_local * self.LocalAlebdoSmoothenessLoss(prediction_R_1, targets,1)
             rs_loss = rs_loss +  0.3333 * self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R_2, targets,2)
@@ -1550,7 +1536,7 @@ class JointLoss(nn.Module):
             else:
                 alg_darker = 'E'
 
-            if darker == 'E':  
+            if darker == 'E':
                 if darker != alg_darker:
                     error_equal_sum += weight
 
@@ -1641,16 +1627,16 @@ class JointLoss(nn.Module):
         return total_loss.data[0]
 
     def evaluate_L0_loss(self, prediction_R, targets):
-        # num_images = prediction_S.size(0) # must be even number         
+        # num_images = prediction_S.size(0) # must be even number
         total_whdr = float(0)
-        count = float(0) 
+        count = float(0)
 
         for i in range(0, 1):
             prediction_R_np = prediction_R
             # prediction_R_np = prediction_R.data[i,:,:,:].cpu().numpy()
             # prediction_R_np = np.transpose(prediction_R_np, (1,2,0))
 
-            # load Json judgement 
+            # load Json judgement
             judgements = json.load(open(targets["judgements_path"][i]))
             whdr = self.compute_whdr(prediction_R_np, judgements, 0.1)
 
@@ -1811,7 +1797,7 @@ class SingleUnetGenerator_S(nn.Module):
 
 
 class SingleUnetSkipConnectionBlock_S(nn.Module):
-    def __init__(self, outer_nc, inner_nc, 
+    def __init__(self, outer_nc, inner_nc,
                  submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False):
         super(SingleUnetSkipConnectionBlock_S, self).__init__()
         self.outermost = outermost
@@ -1830,7 +1816,7 @@ class SingleUnetSkipConnectionBlock_S(nn.Module):
 
             down = [downconv]
             up = [uprelu, upconv]
-            model = down + [submodule] 
+            model = down + [submodule]
             self.model = nn.Sequential(*model)
             self.up_model = nn.Sequential(*up)
 
@@ -1845,7 +1831,7 @@ class SingleUnetSkipConnectionBlock_S(nn.Module):
             int_conv = [nn.AdaptiveAvgPool2d((2,2)), nn.Conv2d(inner_nc, inner_nc/2, kernel_size=3, stride=2, padding=1), nn.ReLU(False)]
 
             fc = [nn.Linear(256, 3)]
-            self.int_conv = nn.Sequential(* int_conv) 
+            self.int_conv = nn.Sequential(* int_conv)
             self.fc = nn.Sequential(* fc)
 
             self.down_model = nn.Sequential(*down)
@@ -1947,8 +1933,8 @@ class SingleUnetSkipConnectionBlock_R(nn.Module):
                                         # kernel_size=4, stride=2,
                                         # padding=1)
 
-            upconv = [uprelu, nn.ConvTranspose2d(inner_nc * 2, inner_nc,    
-                                        kernel_size=4, stride=2, padding=1), nn.ReLU(False), 
+            upconv = [uprelu, nn.ConvTranspose2d(inner_nc * 2, inner_nc,
+                                        kernel_size=4, stride=2, padding=1), nn.ReLU(False),
                                         nn.Conv2d(inner_nc, num_output, kernel_size=1)]
 
             down = [downconv]
@@ -1999,7 +1985,7 @@ class SingleUnetGenerator_L(nn.Module):
         unet_block = SingleUnetSkipConnectionBlock_L(ngf * 8, ngf * 8, innermost=True)
         for i in range(num_downs - 5):
             unet_block = SingleUnetSkipConnectionBlock_L(ngf * 8, ngf * 8, unet_block, norm_layer=norm_layer, use_dropout=use_dropout)
-        
+
         unet_block = SingleUnetSkipConnectionBlock_L(ngf * 4, ngf * 8, unet_block, gird = True, norm_layer=norm_layer)
         unet_block = SingleUnetSkipConnectionBlock_L(ngf * 2, ngf * 4, unet_block, norm_layer=norm_layer)
         unet_block = SingleUnetSkipConnectionBlock_L(ngf, ngf * 2, unet_block, norm_layer=norm_layer)
@@ -2038,8 +2024,8 @@ class SingleUnetSkipConnectionBlock_L(nn.Module):
                                         # kernel_size=4, stride=2,
                                         # padding=1)
 
-            upconv = [uprelu, nn.ConvTranspose2d(inner_nc * 2, inner_nc,    
-                                        kernel_size=4, stride=2, padding=1), nn.ReLU(False), 
+            upconv = [uprelu, nn.ConvTranspose2d(inner_nc * 2, inner_nc,
+                                        kernel_size=4, stride=2, padding=1), nn.ReLU(False),
                                         nn.Conv2d(inner_nc, 1, kernel_size=1), nn.Sigmoid()]
 
             down = [downconv]
@@ -2173,7 +2159,7 @@ class MultiUnetSkipConnectionBlock(nn.Module):
             else:
                 upconv_model_1 = up_1
                 upconv_model_2 = up_2
-            
+
             # model = down + [submodule]
 
         self.downconv_model = nn.Sequential(*down)
@@ -2188,7 +2174,7 @@ class MultiUnetSkipConnectionBlock(nn.Module):
             y_1, y_2 = self.submodule.forward(down_x)
             # y_u = self.upconv_model_u(y_1)
             y_1 = self.upconv_model_1(y_1)
-            
+
             y_2 = self.upconv_model_2(y_2)
 
             return y_1, y_2
@@ -2197,7 +2183,7 @@ class MultiUnetSkipConnectionBlock(nn.Module):
             down_output = self.downconv_model(x)
 
             y_1 = self.upconv_model_1(down_output)
-            y_2 = self.upconv_model_2(down_output)  
+            y_2 = self.upconv_model_2(down_output)
             y_1 = torch.cat([y_1, x], 1)
             y_2 = torch.cat([y_2, x], 1)
 
