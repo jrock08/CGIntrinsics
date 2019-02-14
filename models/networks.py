@@ -11,6 +11,7 @@ import json
 # from . import resnet1
 import matplotlib.pyplot as plt
 from skimage.transform import resize
+from gaussian import GaussianPyramid
 
 ###############################################################################
 # Functions
@@ -142,6 +143,17 @@ class ResidualNetwork(nn.Module):
         passforward = torch.index_select(x, 1, torch.cuda.LongTensor(self.pass_selection))
         return self.adjust_model(x) + passforward
 
+
+def get_human_pair_classifier(in_dim, model_type):
+    if model_type == 'ternary':
+        return HumanPairClassifier(in_dim, model_type)
+    elif model_type == 'binary':
+        return HumanPairClassifier(in_dim, model_type)
+    elif model_type == 'single_score':
+        return SingleScoreHumanClassifier(in_dim, model_type)
+    elif model_type == 'single_score_const_thresh':
+        return SingleScoreHumanClassifier(in_dim, 'single_score', True)
+
 class HumanPairClassifier(nn.Module):
     def __init__(self, in_dim, model_type):
         super(HumanPairClassifier, self).__init__()
@@ -153,6 +165,27 @@ class HumanPairClassifier(nn.Module):
 
     def forward(self, X):
         return self.model(X)
+
+class SingleScoreHumanClassifier(nn.Module):
+    def __init__(self, in_dim, model_type, const_threshold = False):
+        super(SingleScoreHumanClassifier, self).__init__()
+        self.model_type = model_type
+        self.single_score = nn.Linear(in_dim*2,1)
+
+        if const_threshold:
+            self.register_buffer('threshold', torch.Tensor([0.0]))
+        else:
+            self.register_parameter('threshold', nn.Parameter(torch.randn(1)))
+        self.register_parameter('scale', nn.Parameter(torch.randn(1)))
+
+    def forward(self, X):
+        score = self.single_score(X)
+        thresh = torch.clamp(nn.functional.elu(self.threshold) + 1.0, min=0)
+        scale = torch.clamp(nn.functional.elu(self.scale) + 1.0, min=1e-8)
+        v1 = torch.sigmoid(scale * (score - thresh))
+        v2 = 1.0 - torch.sigmoid(scale * (score + thresh))
+        v3 = 1.0 - (v1 + v2)
+        return torch.cat([v3,v1,v2],1)
 
 class JointLoss(nn.Module):
     def __init__(self):
@@ -184,6 +217,7 @@ class JointLoss(nn.Module):
         self.running_stage = 0
 
         self.HumanPairClassifier = None
+        self.pyr_levels = 1
 
     def BilateralRefSmoothnessLoss(self, pred_R, targets, att, num_features):
         # pred_R = pred_R.cpu()
@@ -454,53 +488,20 @@ class JointLoss(nn.Module):
         ce_loss = nn.CrossEntropyLoss(reduction='none')
         ce_loss.cuda()
 
-        bce_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
-        bce_loss.cuda()
-
         eq_loss, ineq_eq_loss, ineq_pr_loss = 0, 0, 0
         num_valid_eq = 0
         num_valid_ineq = 0
 
-        rows = prediction_R.size(1)
-        cols = prediction_R.size(2)
-        num_channel = prediction_R.size(0)
-
-        R_vec = prediction_R.view(num_channel, -1)
-
-        points_1_vec = []
-        points_2_vec = []
-        gts = []
-        weights = []
         # Collect equality annotations
         if judgements_eq.size(1) > 2:
             judgements_eq = judgements_eq.cuda()
+            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_eq, random_filp)
+            gt_eq = gt * 0
 
-            y_1 = torch.floor(judgements_eq[:,0] * rows).long()
-            y_2 = torch.floor(judgements_eq[:,2] * rows).long()
+            eq_loss = torch.sum(weight * ce_loss(human_pair_classifier(torch.cat([feat_1, feat_2], 1)), gt_eq.long()))
+            num_valid_eq = torch.sum(weight)
 
-            if random_filp:
-                x_1 = cols - 1 - torch.floor(judgements_eq[:,1] * cols).long()
-                x_2 = cols - 1 - torch.floor(judgements_eq[:,3] * cols).long()
-            else:
-                x_1 = torch.floor(judgements_eq[:,1] * cols).long()
-                x_2 = torch.floor(judgements_eq[:,3] * cols).long()
-
-            point_1_idx_linear = y_1 * cols + x_1
-            point_2_idx_linear = y_2 * cols + x_2
-
-            sel = torch.rand(point_1_idx_linear.shape).ge(.5).cuda()
-
-            p1 = torch.cat([torch.masked_select(point_1_idx_linear, sel), torch.masked_select(point_2_idx_linear, 1-sel)],0)
-            p2 = torch.cat([torch.masked_select(point_2_idx_linear, sel), torch.masked_select(point_1_idx_linear, 1-sel)],0)
-
-            # extract all pairs of comparisions
-            points_1_vec = torch.index_select(R_vec, 1, Variable(p1, requires_grad = False))
-            points_2_vec = torch.index_select(R_vec, 1, Variable(p2, requires_grad = False))
-
-            weight = Variable(judgements_eq[:,4], requires_grad = False)
-            weight = torch.cat([torch.masked_select(weight, sel), torch.masked_select(weight, 1-sel)], 0)
-
-            human_label = human_pair_classifier(torch.transpose(torch.cat([points_1_vec, points_2_vec], 0), 0, 1))
+            human_label = human_pair_classifier(torch.cat([feat_1, feat_2], 1))
             hl = human_label[:,0]
             gt_eq = torch.ones(hl.shape).cuda()
 
@@ -510,33 +511,11 @@ class JointLoss(nn.Module):
         # collect inequality annotations
         if judgements_ineq.size(1) > 2:
             judgements_ineq = judgements_ineq.cuda()
+            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_ineq, random_filp)
 
-            y_1 = torch.floor(judgements_ineq[:,0] * rows).long()
-            y_2 = torch.floor(judgements_ineq[:,2] * rows).long()
-
-            if random_filp:
-                x_1 = cols - 1 - torch.floor(judgements_ineq[:,1] * cols).long()
-                x_2 = cols - 1 - torch.floor(judgements_ineq[:,3] * cols).long()
-            else:
-                x_1 = torch.floor(judgements_ineq[:,1] * cols).long()
-                x_2 = torch.floor(judgements_ineq[:,3] * cols).long()
-
-            point_1_idx_linear = y_1 * cols + x_1
-            point_2_idx_linear = y_2 * cols + x_2
-
-            sel = torch.rand(point_1_idx_linear.shape).ge(.5).cuda()
-
-            p1 = torch.cat([torch.masked_select(point_1_idx_linear, sel), torch.masked_select(point_2_idx_linear, 1-sel)],0)
-            p2 = torch.cat([torch.masked_select(point_2_idx_linear, sel), torch.masked_select(point_1_idx_linear, 1-sel)],0)
-
-            # extract all pairs of comparisions
-            points_1_vec = torch.index_select(R_vec, 1, Variable(p1, requires_grad = False))
-            points_2_vec = torch.index_select(R_vec, 1, Variable(p2, requires_grad = False))
-            weight = Variable(judgements_ineq[:,4], requires_grad = False)
-
-            ineq_pred = human_pair_classifier(torch.transpose(torch.cat([points_1_vec, points_2_vec], 0), 0, 1))
+            ineq_pred = human_pair_classifier(torch.cat([feat_1, feat_2],1))
             gt_ineq_eq = torch.zeros(ineq_pred.shape[0]).cuda()
-            gt_ineq_pr = torch.cat([torch.zeros(torch.sum(sel).item()), torch.ones(torch.sum(1-sel).item())]).cuda()
+            gt_ineq_pr = gt
 
             ineq_eq_loss = torch.sum(weight * bce_loss(ineq_pred[:,0], gt_ineq_eq))
             ineq_pr_loss = torch.sum(weight * bce_loss(ineq_pred[:,1], gt_ineq_pr))
@@ -545,19 +524,69 @@ class JointLoss(nn.Module):
 
         return .5 * ((eq_loss + ineq_eq_loss) / (num_valid_eq + num_valid_ineq + 1e-8) + ineq_pr_loss / (num_valid_ineq + 1e-8))
 
+    def getPyrValues(self, prediction_R, judgements, random_flip):
+        if self.pyr_levels > 1:
+            gpyr = GaussianPyramid(prediction_R.size(0), self.pyr_levels)
+            gpyr.cuda()
+            pyr_pred_R = gpyr(prediction_R.unsqueeze(0))
+        else:
+            pyr_pred_R = [prediction_R.unsqueeze(0)]
+
+        sel = torch.rand(judgements[:,1].shape).ge(.5).cuda()
+        points_1_vec = []
+        points_2_vec = []
+
+        for pred_R in pyr_pred_R:
+            pred_R = pred_R[0]
+            rows = pred_R.size(1)
+            cols = pred_R.size(2)
+            num_channel = pred_R.size(0)
+
+            R_vec = pred_R.contiguous().view(num_channel, -1)
+
+            y_1 = torch.floor(judgements[:,0] * rows).long()
+            y_2 = torch.floor(judgements[:,2] * rows).long()
+
+            if random_flip:
+                x_1 = cols - 1 - torch.floor(judgements[:,1] * cols).long()
+                x_2 = cols - 1 - torch.floor(judgements[:,3] * cols).long()
+            else:
+                x_1 = torch.floor(judgements[:,1] * cols).long()
+                x_2 = torch.floor(judgements[:,3] * cols).long()
+
+            point_1_idx_linear = y_1 * cols + x_1
+            point_2_idx_linear = y_2 * cols + x_2
+
+            p1 = torch.cat([torch.masked_select(point_1_idx_linear, sel), torch.masked_select(point_2_idx_linear, 1-sel)],0)
+            p2 = torch.cat([torch.masked_select(point_2_idx_linear, sel), torch.masked_select(point_1_idx_linear, 1-sel)],0)
+
+            # extract all pairs of comparisions
+            points_1_vec.append(torch.index_select(R_vec, 1, Variable(p1, requires_grad = False)))
+            points_2_vec.append(torch.index_select(R_vec, 1, Variable(p2, requires_grad = False)))
+
+        weight = Variable(judgements[:,4], requires_grad = False)
+        gt_swapped = torch.cat([torch.zeros(torch.sum(sel).item()), torch.ones(torch.sum(1-sel).item())]).cuda()
+        feat_1 = torch.cat(points_1_vec,0).transpose(0,1)
+        feat_2 = torch.cat(points_2_vec,0).transpose(0,1)
+        return feat_1, feat_2, weight, gt_swapped
+
     def BatchHumanClassifierLoss(self, prediction_R, judgements_eq, judgements_ineq, random_filp, human_pair_classifier):
-        ce_loss = nn.CrossEntropyLoss(reduction='none')
-        ce_loss.cuda()
+        if human_pair_classifier.model_type == 'single_score':
+            ce_loss = nn.NLLLoss(reduction='none')
+            ce_loss.cuda()
+        else:
+            ce_loss = nn.CrossEntropyLoss(reduction='none')
+            ce_loss.cuda()
 
         eq_loss, ineq_loss = 0, 0
         num_valid_eq = 0
         num_valid_ineq = 0
 
-        rows = prediction_R.size(1)
-        cols = prediction_R.size(2)
-        num_channel = prediction_R.size(0)
+        #rows = prediction_R.size(1)
+        #cols = prediction_R.size(2)
+        #num_channel = prediction_R.size(0)
 
-        R_vec = prediction_R.view(num_channel, -1)
+        #R_vec = prediction_R.view(num_channel, -1)
 
         points_1_vec = []
         points_2_vec = []
@@ -566,73 +595,26 @@ class JointLoss(nn.Module):
         # Collect equality annotations
         if judgements_eq.size(1) > 2:
             judgements_eq = judgements_eq.cuda()
+            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_eq, random_filp)
+            gt_eq = gt * 0
 
-            y_1 = torch.floor(judgements_eq[:,0] * rows).long()
-            y_2 = torch.floor(judgements_eq[:,2] * rows).long()
-
-            if random_filp:
-                x_1 = cols - 1 - torch.floor(judgements_eq[:,1] * cols).long()
-                x_2 = cols - 1 - torch.floor(judgements_eq[:,3] * cols).long()
-            else:
-                x_1 = torch.floor(judgements_eq[:,1] * cols).long()
-                x_2 = torch.floor(judgements_eq[:,3] * cols).long()
-
-            point_1_idx_linear = y_1 * cols + x_1
-            point_2_idx_linear = y_2 * cols + x_2
-
-            sel = torch.rand(point_1_idx_linear.shape).ge(.5).cuda()
-
-            p1 = torch.cat([torch.masked_select(point_1_idx_linear, sel), torch.masked_select(point_2_idx_linear, 1-sel)],0)
-            p2 = torch.cat([torch.masked_select(point_2_idx_linear, sel), torch.masked_select(point_1_idx_linear, 1-sel)],0)
-
-            # extract all pairs of comparisions
-            points_1_vec = torch.index_select(R_vec, 1, Variable(p1, requires_grad = False))
-            points_2_vec = torch.index_select(R_vec, 1, Variable(p2, requires_grad = False))
-
-            weight = Variable(judgements_eq[:,4], requires_grad = False)
-            weight = torch.cat([torch.masked_select(weight, sel), torch.masked_select(weight, 1-sel)], 0)
-
-            gt_eq = torch.zeros(p1.shape).cuda()
-
-            eq_loss = torch.sum(weight * ce_loss(human_pair_classifier(torch.transpose(torch.cat([points_1_vec, points_2_vec], 0), 0, 1)), gt_eq.long()))
+            eq_loss = torch.sum(weight * ce_loss(human_pair_classifier(torch.cat([feat_1, feat_2], 1)), gt_eq.long()))
             num_valid_eq = torch.sum(weight)
 
         # collect inequality annotations
         if judgements_ineq.size(1) > 2:
             judgements_ineq = judgements_ineq.cuda()
+            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_ineq, random_filp)
+            gt_ineq = gt + 1
 
-            y_1 = torch.floor(judgements_ineq[:,0] * rows).long()
-            y_2 = torch.floor(judgements_ineq[:,2] * rows).long()
-
-            if random_filp:
-                x_1 = cols - 1 - torch.floor(judgements_ineq[:,1] * cols).long()
-                x_2 = cols - 1 - torch.floor(judgements_ineq[:,3] * cols).long()
-            else:
-                x_1 = torch.floor(judgements_ineq[:,1] * cols).long()
-                x_2 = torch.floor(judgements_ineq[:,3] * cols).long()
-
-            point_1_idx_linear = y_1 * cols + x_1
-            point_2_idx_linear = y_2 * cols + x_2
-
-            sel = torch.rand(point_1_idx_linear.shape).ge(.5).cuda()
-
-            p1 = torch.cat([torch.masked_select(point_1_idx_linear, sel), torch.masked_select(point_2_idx_linear, 1-sel)],0)
-            p2 = torch.cat([torch.masked_select(point_2_idx_linear, sel), torch.masked_select(point_1_idx_linear, 1-sel)],0)
-
-            # extract all pairs of comparisions
-            points_1_vec = torch.index_select(R_vec, 1, Variable(p1, requires_grad = False))
-            points_2_vec = torch.index_select(R_vec, 1, Variable(p2, requires_grad = False))
-            weight = Variable(judgements_ineq[:,4], requires_grad = False)
-
-            gt_ineq = torch.cat([torch.ones(torch.sum(sel).item()), 2 * torch.ones(torch.sum(1-sel).item())]).cuda()
-            ineq_loss = torch.sum(weight * ce_loss(human_pair_classifier(torch.transpose(torch.cat([points_1_vec, points_2_vec], 0), 0, 1)), gt_ineq.long()))
+            ineq_loss = torch.sum(weight * ce_loss(human_pair_classifier(torch.cat([feat_1, feat_2], 1)), gt_ineq.long()))
             num_valid_ineq = torch.sum(weight)
 
 
         # avoid divide by zero 
         #print 'eq, ineq', eq_loss/(num_valid_eq + 1e-8), ineq_loss/(num_valid_ineq + 1e-8)
         # equal weight to eq, >, < for image
-        return .5 * (eq_loss/(num_valid_eq + 1e-8) +  2 * ineq_loss/(num_valid_ineq + 1e-8))
+        return eq_loss/(num_valid_eq + 1e-8) +  2 * ineq_loss/(num_valid_ineq + 1e-8)
         # no weighting
         #return (eq_loss + ineq_loss) / (num_valid_eq + num_valid_ineq + 1e-8)
         # equal weight to eq, ineq for image
@@ -1251,6 +1233,30 @@ class JointLoss(nn.Module):
         # avoid divide by zero 
         return (eq_loss)/(num_valid_eq + 1e-8) + ineq_loss/(num_valid_ineq + 1e-8)
 
+
+    def IIW_loss(self, prediction, targets):
+        num_images = prediction.size(0)
+        total_iiw_loss = Variable(torch.cuda.FloatTensor(1))
+        total_iiw_loss[0] = 0
+
+        for i in range(0, num_images):
+            # judgements = json.load(open(targets["judgements_path"][i]))
+            # total_iiw_loss += self.w_IIW * self.Ranking_Loss(prediction_R[i,:,:,:], judgements, random_filp)
+            judgements_eq = targets["eq_mat"][i]
+            judgements_ineq = targets["ineq_mat"][i]
+            random_filp = targets["random_filp"][i]
+            if self.HumanPairClassifier is not None:
+                if self.HumanPairClassifier.model_type == 'ternary':
+                    total_iiw_loss += self.w_IIW * self.BatchHumanClassifierLoss(prediction[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.HumanPairClassifier)
+                elif self.HumanPairClassifier.model_type == 'binary':
+                    total_iiw_loss += self.w_IIW * self.BatchHumanBinaryClassifierLoss(prediction[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.HumanPairClassifier)
+                elif self.HumanPairClassifier.model_type == 'single_score':
+                    total_iiw_loss += self.w_IIW * self.BatchHumanClassifierLoss(prediction[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.HumanPairClassifier)
+
+            else:
+                total_iiw_loss += self.w_IIW * self.BatchRankingLoss(prediction[i,:,:,:], judgements_eq, judgements_ineq, random_filp)
+        return (total_iiw_loss)/num_images
+
     def __call__(self, input_images, prediction_R, prediction_R_human, prediction_S, targets, data_set_name, epoch):
 
         lambda_CG = 0.5
@@ -1290,23 +1296,7 @@ class JointLoss(nn.Module):
                                                     torch.exp(prediction_S), targets)
 
             # IIW Loss
-            total_iiw_loss = Variable(torch.cuda.FloatTensor(1))
-            total_iiw_loss[0] = 0
-
-            for i in range(0, num_images):
-                # judgements = json.load(open(targets["judgements_path"][i]))
-                # total_iiw_loss += self.w_IIW * self.Ranking_Loss(prediction_R[i,:,:,:], judgements, random_filp)
-                judgements_eq = targets["eq_mat"][i]
-                judgements_ineq = targets["ineq_mat"][i]
-                random_filp = targets["random_filp"][i]
-                if self.HumanPairClassifier is not None:
-                    if self.HumanPairClassifier.model_type == 'ternary':
-                        total_iiw_loss += self.w_IIW * self.BatchHumanClassifierLoss(prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.HumanPairClassifier)
-                    elif self.HumanPairClassifier.model_type == 'binary':
-                        total_iiw_loss += self.w_IIW * self.BatchHumanBinaryClassifierLoss(prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.HumanPairClassifier)
-                else:
-                    total_iiw_loss += self.w_IIW * self.BatchRankingLoss(prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp)
-            total_iiw_loss = (total_iiw_loss)/num_images
+            total_iiw_loss = self.IIW_loss(prediction_R_human, targets)
 
             # print("reconstr_loss ", reconstr_loss.data[0])
             # print("rs_loss ", rs_loss.data[0])
@@ -1425,6 +1415,16 @@ class JointLoss(nn.Module):
         weight_equal_sum = 0.0
         weight_inequal_sum = 0.0
 
+        # convert to pyramid
+        if self.pyr_levels > 1:
+            reflectance_tensor = torch.Tensor(np.transpose(reflectance, (2,0,1))).cuda()
+            gauss_pyramid = GaussianPyramid(reflectance_tensor.size(0), self.pyr_levels)
+            gauss_pyramid.cuda()
+            gpyr = gauss_pyramid(reflectance_tensor.unsqueeze(0))
+        else:
+            reflectance_tensor = torch.Tensor(np.transpose(reflectance, (2,0,1))).cuda()
+            gpyr = [reflectance_tensor.unsqueeze(0)]
+
         for c in comparisons:
             # "darker" is "J_i" in our paper
             darker = c['darker']
@@ -1441,12 +1441,17 @@ class JointLoss(nn.Module):
             if not point1['opaque'] or not point2['opaque']:
                 continue
 
-            # convert to grayscale and threshold
-            p1 = torch.Tensor(reflectance[int(point1['y'] * rows), int(point1['x'] * cols), ...]).cuda()
-            p2 = torch.Tensor(reflectance[int(point2['y'] * rows), int(point2['x'] * cols), ...]).cuda()
+            p1 = []
+            p2 = []
+            for img in gpyr:
+                rows, cols = img.shape[0:2]
+                p1.append(img[0, : ,int(point1['y'] * rows), int(point1['x'] * cols)].unsqueeze(0))
+                p2.append(img[0, : ,int(point2['y'] * rows), int(point2['x'] * cols)].unsqueeze(0))
+            p1 = torch.cat(p1,1)
+            p2 = torch.cat(p2,1)
 
             if human_classifier.model_type == 'ternary':
-                res_log_prob = human_classifier(torch.cat([p1, p2]).unsqueeze(0))
+                res_log_prob = human_classifier(torch.cat([p1, p2], 1))
                 res_sel = res_log_prob.argmax(1)
 
                 if res_sel.item() == 0:
@@ -1456,7 +1461,7 @@ class JointLoss(nn.Module):
                 else:
                     alg_darker = '2'
             elif human_classifier.model_type == 'binary':
-                res_bin_prob = human_classifier(torch.cat([p1,p2]).unsqueeze(0))
+                res_bin_prob = human_classifier(torch.cat([p1,p2], 1))
 
                 if res_bin_prob[0,0] > eq_threshold:
                     alg_darker = 'E'
@@ -1465,6 +1470,20 @@ class JointLoss(nn.Module):
                         alg_darker = '1'
                     else:
                         alg_darker = '2'
+            elif human_classifier.model_type == 'single_score':
+                res_log_prob = human_classifier(torch.cat([p1, p2],1))
+                res_sel = res_log_prob.argmax(1)
+                #if res_sel.item() == 0:
+                #    res_sel = res_log_prob.argsort(1, descending=True)[0][1]
+
+                if res_sel.item() == 0:
+                    alg_darker = 'E'
+                elif res_sel.item() == 2:
+                    alg_darker = '1'
+                else:
+                    alg_darker = '2'
+
+            print alg_darker, darker
 
             if darker == 'E':
                 if darker != alg_darker:
@@ -1492,7 +1511,7 @@ class JointLoss(nn.Module):
         comparisons = judgements['intrinsic_comparisons']
         id_to_points = {p['id']: p for p in points}
         rows, cols = reflectance.shape[0:2]
- 
+
         error_sum = 0.0
         error_equal_sum = 0.0
         error_inequal_sum = 0.0
@@ -1562,22 +1581,18 @@ class JointLoss(nn.Module):
 
         for i in range(0, prediction_R.size(0)):
             prediction_R_np = prediction_R.data[i,:,:,:].cpu().numpy()
-            #prediction_R_np = np.transpose(np.exp(prediction_R_np * 0.4545), (1,2,0))
-            prediction_R_np = np.transpose(np.exp(prediction_R_np), (1,2,0))
-
-            # o_h = targets['oringinal_shape'][0].numpy()
-            # o_w = targets['oringinal_shape'][1].numpy()
-
-            # prediction_R_srgb_np = prediction_R_srgb.data[i,:,:,:].cpu().numpy()
-            # prediction_R_srgb_np = np.transpose(prediction_R_srgb_np, (1,2,0))
+            if human_classifier is None:
+                prediction_R_np = np.transpose(np.exp(prediction_R_np), (1,2,0))
+            else:
+                prediction_R_np = np.transpose(prediction_R_np, (1,2,0))
 
             o_h = targets['oringinal_shape'][0].numpy()
             o_w = targets['oringinal_shape'][1].numpy()
-            # resize to original resolution 
-            prediction_R_np = resize(prediction_R_np, (o_h[i],o_w[i]), order=1, preserve_range=True)
+            # resize to original resolution
+            #prediction_R_np = resize(prediction_R_np, (o_h[i],o_w[i]), order=1, preserve_range=True)
 
             # print(targets["judgements_path"][i])
-            # load Json judgement 
+            # load Json judgement
             judgements = json.load(open(targets["judgements_path"][i]))
             whdrs = []
             whdrs_eq = []
@@ -2066,17 +2081,16 @@ class SingleUnetSkipConnectionBlock_L(nn.Module):
 
     def forward(self, x):
         if self.outermost:
-            y = self.model(x)            
+            y = self.model(x)
             return y, self.grid_y
         else:
             y = self.model(x)
-            
+
             if self.grid:
                 upsample_layer = nn.Upsample(scale_factor= 8, mode='bilinear')
                 self.grid_y = upsample_layer(self.grid_layer(y))
 
             return torch.cat([y, x], 1)
-
 
 
 class MultiUnetGenerator(nn.Module):

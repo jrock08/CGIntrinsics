@@ -74,7 +74,8 @@ class Intrinsics_Model(BaseModel):
             model.rgb_to_human_gray = rgb_to_human_gray
 
         if opt.human_pair_classifier:
-            model.hpc = networks.HumanPairClassifier(output_nc, opt.human_pair_classifier_type)
+            model.hpc = networks.get_human_pair_classifier(output_nc * opt.num_pyr_levels, opt.human_pair_classifier_type)
+            #model.hpc = networks.HumanPairClassifier(output_nc, opt.human_pair_classifier_type)
 
             if len(opt.gpu_ids) > 0:
                 model.hpc.cuda(opt.gpu_ids[0])
@@ -99,6 +100,8 @@ class Intrinsics_Model(BaseModel):
         # if self.isTrain:
         self.criterion_joint = networks.JointLoss()
         self.criterion_joint.HumanPairClassifier = model.hpc
+        self.criterion_joint.pyr_levels = opt.num_pyr_levels
+        self.criterion_joint.w_IIW = opt.iiw_weight
         # initialize optimizers
 
         print('---------- Networks initialized -------------')
@@ -119,7 +122,7 @@ class Intrinsics_Model(BaseModel):
         prediction_R_raw, prediction_S  = self.netG.g_model.forward(input_images)
         if self.append_chroma:
             chroma = input_images / torch.clamp(torch.mean(input_images,1,keepdim=True), min=1e-8, max=1.0)
-            prediction_R_raw = torch.cat([prediction_R_raw, chroma], 1)
+            prediction_R_raw = torch.cat([prediction_R_raw, prediction_R_raw * chroma], 1)
         if self.human_judgement_gray:
             if self.gpu_ids and isinstance(prediction_R_raw, torch.cuda.FloatTensor):
                 prediction_R_human = nn.parallel.data_parallel(self.netG.rgb_to_human_gray, prediction_R_raw, self.gpu_ids)
@@ -168,38 +171,15 @@ class Intrinsics_Model(BaseModel):
 
     def val_eval_intrinsics(self, epoch, data_set_name):
         self.forward_both()
-        num_images = self.input_images.size(0)
 
-        total_iiw_loss = 0
-        for i in range(0, num_images):
-            judgements_eq = self.targets["eq_mat"][i]
-            judgements_ineq = self.targets["ineq_mat"][i]
-            random_filp = self.targets["random_filp"][i]
-            if self.criterion_joint.HumanPairClassifier is not None:
-                total_iiw_loss += self.criterion_joint.BatchHumanClassifierLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.criterion_joint.HumanPairClassifier).item()
-            else:
-                total_iiw_loss += self.criterion_joint.BatchRankingLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp).item()
-
-        return total_iiw_loss
+        return self.criterion_joint.IIW_loss(self.prediction_R_human, self.targets).item()
 
     def val_eval_loss(self, epoch, data_set_name):
         self.forward_both()
         num_images = self.input_images.size(0)
 
         if data_set_name == 'IIW':
-            total_iiw_loss = 0
-            for i in range(0, num_images):
-                judgements_eq = self.targets["eq_mat"][i]
-                judgements_ineq = self.targets["ineq_mat"][i]
-                random_filp = self.targets["random_filp"][i]
-                if self.criterion_joint.HumanPairClassifier is not None:
-                    if self.criterion_joint.HumanPairClassifier.model_type == 'ternary':
-                        total_iiw_loss += self.criterion_joint.BatchHumanClassifierLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.criterion_joint.HumanPairClassifier).item()
-                    elif self.criterion_joint.HumanPairClassifier.model_type == 'binary':
-                        total_iiw_loss += self.criterion_joint.BatchHumanBinaryClassifierLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp, self.criterion_joint.HumanPairClassifier).item()
-                else:
-                    total_iiw_loss += self.criterion_joint.BatchRankingLoss(self.prediction_R_human[i,:,:,:], judgements_eq, judgements_ineq, random_filp).item()
-            return total_iiw_loss
+            return self.criterion_joint.IIW_loss(self.prediction_R_human, self.targets).item()
         elif data_set_name == 'CGIntrinsics':
             total_loss = 0
             prediction_R = self.prediction_R
@@ -446,7 +426,7 @@ class Intrinsics_Model(BaseModel):
         # (2) smooth shading (S)
         # (100) no data, ignored
         y_true = saw_utils.load_pixel_labels(pixel_labels_dir=pixel_labels_dir, photo_id=photo_id)
-        
+
         img_path = img_dir+ str(photo_id) + ".png"
 
         # diffuclut and harder dataset

@@ -44,6 +44,8 @@ class BaseOptions(object):
         self.parser.add_argument('--human_pair_classifier_type', type=str, default='ternary', help='ternary or binary')
         self.parser.add_argument('--output_reflectance_dim', type=int, default=-1)
         self.parser.add_argument('--append_chroma', action='store_true')
+        self.parser.add_argument('--num_pyr_levels', type=int, default=1)
+        self.parser.add_argument('--iiw_weight', type=float, default=4.0)
 
         self.initialized = True
 

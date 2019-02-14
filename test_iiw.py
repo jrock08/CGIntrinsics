@@ -23,7 +23,8 @@ def test_iiw(model, list_name):
     model.switch_to_eval()
 
     outp = []
-    thresholds = np.linspace(0,1,15)
+    #thresholds = np.linspace(0,1,15)
+    thresholds = [.1]
     total_loss = np.zeros(len(thresholds))
     total_loss_eq = np.zeros(len(thresholds))
     total_loss_ineq = np.zeros(len(thresholds))
