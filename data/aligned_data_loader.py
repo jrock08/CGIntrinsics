@@ -13,7 +13,7 @@ from torch.utils.data.dataloader import default_collate, container_abcs, string_
 NUM_WORKERS = 8
 
 
-def my_collate(batch, field_skip = ['eq_mat','ineq_mat']):
+def my_collate(batch, field_skip = ['eq_mat','ineq_mat', 'gt_eq_mat', 'gt_ineq_mat']):
     # Treat the data in field_skip fields as special (don't concat, just keep the tensors as a list).  This lets us handle eq_mat and ineq_mat in the data loader which should allow for a speedup.
     r"""Puts each data field into a tensor with outer dimension batch size"""
 

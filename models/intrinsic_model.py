@@ -102,6 +102,7 @@ class Intrinsics_Model(BaseModel):
         self.criterion_joint.HumanPairClassifier = model.hpc
         self.criterion_joint.pyr_levels = opt.num_pyr_levels
         self.criterion_joint.w_IIW = opt.iiw_weight
+        self.criterion_joint.opt = opt
         # initialize optimizers
 
         print('---------- Networks initialized -------------')
@@ -205,7 +206,10 @@ class Intrinsics_Model(BaseModel):
         input_images = Variable(input_.cuda() , requires_grad = False)
         prediction_R, prediction_R_human, prediction_S = self.forward_eval(input_images)
 
-        return self.criterion_joint.evaluate_WHDR(prediction_R_human, targets, threshold, self.netG.hpc)
+        chroma = input_images / torch.clamp(torch.sum(input_images,1,keepdim=True), min=1e-8)
+        prediction_RGB = torch.exp(prediction_R.detach()) * chroma
+
+        return self.criterion_joint.evaluate_WHDR(prediction_R_human, targets, threshold, self.netG.hpc), prediction_RGB
 
     def get_output_images(self, input_):
         input_images = Variable(input_.cuda() , requires_grad = False)

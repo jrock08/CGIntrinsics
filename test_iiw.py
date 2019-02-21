@@ -8,6 +8,8 @@ from data.data_loader import CreateDataLoader
 from models.models import create_model
 # from data.data_loader import CreateDataLoader_TEST
 from data.data_loader import CreateDataLoaderIIWTest
+from data.data_loader import CreateDataLoaderIIW
+import torchvision
 
 opt = TestOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
 
@@ -34,13 +36,21 @@ def test_iiw(model, list_name):
         # print("============================= Testing EVAL MODE ============================", j)
         test_list_dir = full_root + '/CGIntrinsics/IIW/' + list_name
         print(test_list_dir)
+        # True test dataloader
         data_loader_IIW_TEST = CreateDataLoaderIIWTest(full_root, test_list_dir, j)
         dataset_iiw_test = data_loader_IIW_TEST.load_data()
+
+        #data_loader_IIW_TEST = CreateDataLoaderIIW(full_root, test_list_dir, j)
+        #dataset_iiw_test = data_loader_IIW_TEST.load_data()
 
         for i, data in enumerate(dataset_iiw_test):
             stacked_img = data['img_1']
             targets = data['target_1']
-            total_whdr, total_whdr_eq, total_whdr_ineq, count = model.evlaute_iiw(stacked_img, targets, thresholds)
+            #model.set_input(stacked_img, targets)
+            #model.val_eval_loss(0, 'IIW')
+            [total_whdr, total_whdr_eq, total_whdr_ineq, count], pred_rgb = model.evlaute_iiw(stacked_img, targets, thresholds)
+            torchvision.utils.save_image(pred_rgb, 'out_test_rgb.png')
+            torchvision.utils.save_image(stacked_img, 'in_test_rgb.png')
             total_loss += total_whdr
             total_loss_eq += total_whdr_eq
             total_loss_ineq += total_whdr_ineq

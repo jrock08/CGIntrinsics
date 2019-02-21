@@ -10,6 +10,7 @@ import os
 import os.path
 import sys
 import math, random
+import json
 
 import skimage
 from skimage import io
@@ -52,7 +53,7 @@ def srgb_to_rgb(srgb):
 def rgb_to_chromaticity(rgb):
     """ converts rgb to chromaticity """
     irg = np.zeros_like(rgb)
-    s = np.mean(rgb, axis=-1) + 1e-6
+    s = np.sum(rgb, axis=-1) + 1e-6
 
     irg[..., 0] = rgb[..., 0] / s
     irg[..., 1] = rgb[..., 1] / s
@@ -608,6 +609,52 @@ class IIW_ImageFolder(data.Dataset):
 
         return sub_C
 
+    def parse_true_judgements(self, judgements):
+        #x,y in normalized size
+        #eq_matrix = [y1,x1,y2,x2,weight]
+
+        points = judgements['intrinsic_points']
+        comparisons = judgements['intrinsic_comparisons']
+        id_to_points = {p['id']: p for p in points}
+
+        eq_list = []
+        ineq_list = []
+
+        for c in comparisons:
+            darker = c['darker']
+
+            if darker not in ('1','2','E'):
+                continue
+
+            weight = c['darker_score']
+            if weight <= 0.0 or weight is None:
+                continue
+
+            p1 = id_to_points[c['point1']]
+            p2 = id_to_points[c['point2']]
+
+            if not p1['opaque'] or not p2['opaque']:
+                continue
+
+            if darker == 'E':
+                eq_list.append([p1['y'],p1['x'],p2['y'],p2['x'], weight])
+            elif darker == '2':
+                ineq_list.append([p1['y'],p1['x'],p2['y'],p2['x'], weight])
+            else:
+                ineq_list.append([p2['y'],p2['x'],p1['y'],p1['x'], weight])
+
+        if len(eq_list) > 0:
+            equal_mat = torch.from_numpy(np.array(eq_list)).contiguous().float()
+        else:
+            equal_mat = torch.Tensor(1,1)
+
+        if len(ineq_list) > 0:
+            inequal_mat = torch.from_numpy(np.array(ineq_list)).contiguous().float()
+        else:
+            inequal_mat = torch.Tensor(1,1)
+
+        return equal_mat, inequal_mat
+
     def long_range_loader(self, h5_path):
         hdf5_file_read_img = h5py.File(h5_path,'r')
         num_eq = hdf5_file_read_img.get('/info/num_eq')
@@ -685,6 +732,11 @@ class IIW_ImageFolder(data.Dataset):
             eq_mat, ineq_mat = self.long_range_loader(targets_1['mat_path'])
             targets_1['eq_mat'] = eq_mat
             targets_1['ineq_mat'] = ineq_mat
+
+        judgements = json.load(open(targets_1['judgements_path']))
+        true_eq_mat, true_ineq_mat = self.parse_true_judgements(judgements)
+        targets_1['gt_eq_mat'] = true_eq_mat
+        targets_1['gt_ineq_mat'] = true_ineq_mat
 
         sparse_shading_name = str(self.height) + "x" + str(self.width)
 

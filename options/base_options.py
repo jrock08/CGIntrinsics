@@ -46,6 +46,8 @@ class BaseOptions(object):
         self.parser.add_argument('--append_chroma', action='store_true')
         self.parser.add_argument('--num_pyr_levels', type=int, default=1)
         self.parser.add_argument('--iiw_weight', type=float, default=4.0)
+        self.parser.add_argument('--detach_iiw_loss', action='store_true')
+        self.parser.add_argument('--use_base_IIW', action='store_true')
 
         self.initialized = True
 

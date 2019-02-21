@@ -145,12 +145,15 @@ class HumanPairClassifier(nn.Module):
         super(HumanPairClassifier, self).__init__()
         self.model_type = model_type
         if model_type == 'ternary':
-            self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16, 3))
+            self.model = nn.Sequential(nn.Linear(in_dim * 2 + 2 * 2 * in_dim * in_dim, 3))
+            #self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16, 3))
         elif model_type == 'binary':
-            self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16, 2))
+            self.model = nn.Sequential(nn.Linear(in_dim * 2 + 2 * 2 * in_dim * in_dim, 2))
+            #self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16, 2))
 
     def forward(self, X):
-        return self.model(X)
+        Y = X.unsqueeze(1) * X.unsqueeze(2)
+        return self.model(torch.cat([X,Y.view(Y.size(0), -1)],1))
 
 class SingleScoreHumanClassifier(nn.Module):
     def __init__(self, in_dim, model_type, const_threshold = False):
@@ -204,6 +207,7 @@ class JointLoss(nn.Module):
 
         self.HumanPairClassifier = None
         self.pyr_levels = 1
+        self.opt = None
 
     def BilateralRefSmoothnessLoss(self, pred_R, targets, att, num_features):
         # pred_R = pred_R.cpu()
@@ -578,14 +582,22 @@ class JointLoss(nn.Module):
         points_2_vec = []
         gts = []
         weights = []
+
+        pred_hist = None
+        gt_hist = None
+
         # Collect equality annotations
         if judgements_eq.size(1) > 2:
             judgements_eq = judgements_eq.cuda()
             feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_eq, random_filp)
             gt_eq = gt * 0
 
-            eq_loss = torch.sum(weight * ce_loss(human_pair_classifier(torch.cat([feat_1, feat_2], 1)), gt_eq.long()))
+            pred_eq = human_pair_classifier(torch.cat([feat_1, feat_2],1))
+
+            eq_loss = torch.sum(weight * ce_loss(pred_eq, gt_eq.long()))
             num_valid_eq = torch.sum(weight)
+            pred_hist = torch.histc(pred_eq.argmax(1).cpu().detach().float(), bins=3, min=0, max=2)
+            gt_hist = torch.histc(gt_eq.cpu().detach().float(), bins=3, min=0, max=2)
 
         # collect inequality annotations
         if judgements_ineq.size(1) > 2:
@@ -593,10 +605,20 @@ class JointLoss(nn.Module):
             feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_ineq, random_filp)
             gt_ineq = gt + 1
 
-            ineq_loss = torch.sum(weight * ce_loss(human_pair_classifier(torch.cat([feat_1, feat_2], 1)), gt_ineq.long()))
+            pred_ineq = human_pair_classifier(torch.cat([feat_1, feat_2], 1))
+
+            ineq_loss = torch.sum(weight * ce_loss(pred_ineq, gt_ineq.long()))
             num_valid_ineq = torch.sum(weight)
+            ineq_hist = torch.histc(pred_ineq.argmax(1).cpu().detach().float(), bins=3, min=0, max=2)
+            gt_ineq_hist = torch.histc(gt_ineq.cpu().detach().float(), bins=3, min=0, max=2)
+            if pred_hist is not None:
+                pred_hist = pred_hist + ineq_hist
+                gt_hist = gt_hist + gt_ineq_hist
+            else:
+                pred_hist = ineq_hist
+                gt_hist = gt_ineq_hist
 
-
+        print pred_hist, gt_hist
         # avoid divide by zero
         #print 'eq, ineq', eq_loss/(num_valid_eq + 1e-8), ineq_loss/(num_valid_ineq + 1e-8)
         # equal weight to eq, >, < for image
@@ -1228,8 +1250,12 @@ class JointLoss(nn.Module):
         for i in range(0, num_images):
             # judgements = json.load(open(targets["judgements_path"][i]))
             # total_iiw_loss += self.w_IIW * self.Ranking_Loss(prediction_R[i,:,:,:], judgements, random_filp)
-            judgements_eq = targets["eq_mat"][i]
-            judgements_ineq = targets["ineq_mat"][i]
+            if self.opt.use_base_IIW:
+                judgements_eq = targets["gt_eq_mat"][i]
+                judgements_ineq = targets["gt_ineq_mat"][i]
+            else:
+                judgements_eq = targets["eq_mat"][i]
+                judgements_ineq = targets["ineq_mat"][i]
             random_filp = targets["random_filp"][i]
             if self.HumanPairClassifier is not None:
                 if self.HumanPairClassifier.model_type == 'ternary':
@@ -1282,7 +1308,10 @@ class JointLoss(nn.Module):
                                                     torch.exp(prediction_S), targets)
 
             # IIW Loss
-            total_iiw_loss = self.IIW_loss(prediction_R_human, targets)
+            if self.opt.detach_iiw_loss:
+                total_iiw_loss = self.IIW_loss(prediction_R_human.detach(), targets)
+            else:
+                total_iiw_loss = self.IIW_loss(prediction_R_human, targets)
 
             # print("reconstr_loss ", reconstr_loss.data[0])
             # print("rs_loss ", rs_loss.data[0])
@@ -1411,6 +1440,8 @@ class JointLoss(nn.Module):
             reflectance_tensor = torch.Tensor(np.transpose(reflectance, (2,0,1))).cuda()
             gpyr = [reflectance_tensor.unsqueeze(0)]
 
+        counts = [0,0,0]
+        gt_counts = [0,0,0]
         for c in comparisons:
             # "darker" is "J_i" in our paper
             darker = c['darker']
@@ -1430,7 +1461,7 @@ class JointLoss(nn.Module):
             p1 = []
             p2 = []
             for img in gpyr:
-                rows, cols = img.shape[0:2]
+                rows, cols = img.shape[2:]
                 p1.append(img[0, : ,int(point1['y'] * rows), int(point1['x'] * cols)].unsqueeze(0))
                 p2.append(img[0, : ,int(point2['y'] * rows), int(point2['x'] * cols)].unsqueeze(0))
             p1 = torch.cat(p1,1)
@@ -1439,6 +1470,8 @@ class JointLoss(nn.Module):
             if human_classifier.model_type == 'ternary':
                 res_log_prob = human_classifier(torch.cat([p1, p2], 1))
                 res_sel = res_log_prob.argmax(1)
+                #if res_sel.item() == 0:
+                #    res_sel = res_log_prob.argsort(1, descending=True)[0][1]
 
                 if res_sel.item() == 0:
                     alg_darker = 'E'
@@ -1469,7 +1502,7 @@ class JointLoss(nn.Module):
                 else:
                     alg_darker = '2'
 
-            print alg_darker, darker
+            #print alg_darker, darker
 
             if darker == 'E':
                 if darker != alg_darker:
@@ -1485,7 +1518,23 @@ class JointLoss(nn.Module):
             if darker != alg_darker:
                 error_sum += weight
 
+            if alg_darker == 'E':
+                counts[0] += 1
+            elif alg_darker == '1':
+                counts[1] += 1
+            elif alg_darker == '2':
+                counts[2] += 1
+
+            if darker == 'E':
+                gt_counts[0] += 1
+            elif darker == '1':
+                gt_counts[1] += 1
+            elif darker == '2':
+                gt_counts[2] += 1
+
             weight_sum += weight
+
+        print counts, gt_counts
 
         if weight_sum:
             return (error_sum / weight_sum), error_equal_sum/( weight_equal_sum + 1e-10), error_inequal_sum/(weight_inequal_sum + 1e-10)
