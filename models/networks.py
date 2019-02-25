@@ -130,36 +130,51 @@ class ResidualNetwork(nn.Module):
         return self.adjust_model(x) + passforward
 
 
-def get_human_pair_classifier(in_dim, model_type):
+def get_human_pair_classifier(in_dim, model_type, bilinear):
     if model_type == 'ternary':
-        return HumanPairClassifier(in_dim, model_type)
+        return HumanPairClassifier(in_dim, model_type, bilinear)
     elif model_type == 'binary':
-        return HumanPairClassifier(in_dim, model_type)
+        return HumanPairClassifier(in_dim, model_type, bilinear)
     elif model_type == 'single_score':
-        return SingleScoreHumanClassifier(in_dim, model_type)
+        return SingleScoreHumanClassifier(in_dim, model_type, False, bilinear)
     elif model_type == 'single_score_const_thresh':
-        return SingleScoreHumanClassifier(in_dim, 'single_score', True)
+        return SingleScoreHumanClassifier(in_dim, 'single_score', True, bilinear)
 
 class HumanPairClassifier(nn.Module):
-    def __init__(self, in_dim, model_type):
+    def __init__(self, in_dim, model_type, bilinear=False):
         super(HumanPairClassifier, self).__init__()
         self.model_type = model_type
+        self.bilinear = bilinear
+
+        if bilinear:
+            in_dim = in_dim * 2 + 2 * 2 * in_dim * in_dim
+        else:
+            in_dim = 2 * in_dim
+
         if model_type == 'ternary':
-            self.model = nn.Sequential(nn.Linear(in_dim * 2 + 2 * 2 * in_dim * in_dim, 3))
+            self.model = nn.Sequential(nn.Linear(in_dim, 3))
             #self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16, 3))
         elif model_type == 'binary':
-            self.model = nn.Sequential(nn.Linear(in_dim * 2 + 2 * 2 * in_dim * in_dim, 2))
+            self.model = nn.Sequential(nn.Linear(in_dim, 2))
             #self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16, 2))
 
     def forward(self, X):
-        Y = X.unsqueeze(1) * X.unsqueeze(2)
-        return self.model(torch.cat([X,Y.view(Y.size(0), -1)],1))
+        if self.bilinear:
+            Y = X.unsqueeze(1) * X.unsqueeze(2)
+            return self.model(torch.cat([X,Y.view(Y.size(0), -1)],1))
+        else:
+            return self.model(X)
 
 class SingleScoreHumanClassifier(nn.Module):
-    def __init__(self, in_dim, model_type, const_threshold = False):
+    def __init__(self, in_dim, model_type, const_threshold = False, bilinear = False):
         super(SingleScoreHumanClassifier, self).__init__()
         self.model_type = model_type
-        self.single_score = nn.Linear(in_dim*2,1)
+        self.bilinear = bilinear
+        if bilinear:
+            self.single_score = nn.Linear(in_dim * 2 + (2*in_dim)**2, 1)
+        else:
+            self.single_score = nn.Linear(in_dim * 2, 1)
+
 
         if const_threshold:
             self.register_buffer('threshold', torch.Tensor([0.0]))
@@ -168,7 +183,11 @@ class SingleScoreHumanClassifier(nn.Module):
         self.register_parameter('scale', nn.Parameter(torch.randn(1)))
 
     def forward(self, X):
-        score = self.single_score(X)
+        if self.bilinear:
+            Y = X.unsqueeze(1) * X.unsqueeze(2)
+            score = self.single_score(torch.cat([X,Y.view(Y.size(0),-1)],1))
+        else:
+            score = self.single_score(X)
         thresh = torch.clamp(nn.functional.elu(self.threshold) + 1.0, min=0)
         scale = torch.clamp(nn.functional.elu(self.scale) + 1.0, min=1e-8)
         v1 = torch.sigmoid(scale * (score - thresh))
@@ -1309,7 +1328,15 @@ class JointLoss(nn.Module):
 
             # IIW Loss
             if self.opt.detach_iiw_loss:
-                total_iiw_loss = self.IIW_loss(prediction_R_human.detach(), targets)
+                detach_channels = 1
+                if self.opt.append_chroma:
+                    detach_channels += 3
+
+                if prediction_R_human.size(1) == detach_channels:
+                    total_iiw_loss = self.IIW_loss(prediction_R_human.detach(), targets)
+                else:
+                    prediction_R_human_detach = torch.cat([prediction_R_human[:,:detach_channels,...].detach(), prediction_R_human[:,detach_channels:,...]], 1)
+                    total_iiw_loss = self.IIW_loss(prediction_R_human_detach, targets)
             else:
                 total_iiw_loss = self.IIW_loss(prediction_R_human, targets)
 

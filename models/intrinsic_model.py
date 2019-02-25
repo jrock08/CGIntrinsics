@@ -74,7 +74,7 @@ class Intrinsics_Model(BaseModel):
             model.rgb_to_human_gray = rgb_to_human_gray
 
         if opt.human_pair_classifier:
-            model.hpc = networks.get_human_pair_classifier(output_nc * opt.num_pyr_levels, opt.human_pair_classifier_type)
+            model.hpc = networks.get_human_pair_classifier(output_nc * opt.num_pyr_levels, opt.human_pair_classifier_type, opt.bilinear_classifier)
             #model.hpc = networks.HumanPairClassifier(output_nc, opt.human_pair_classifier_type)
 
             if len(opt.gpu_ids) > 0:
@@ -123,7 +123,8 @@ class Intrinsics_Model(BaseModel):
         prediction_R_raw, prediction_S  = self.netG.g_model.forward(input_images)
         if self.append_chroma:
             chroma = input_images / torch.clamp(torch.mean(input_images,1,keepdim=True), min=1e-8, max=1.0)
-            prediction_R_raw = torch.cat([prediction_R_raw, prediction_R_raw * chroma], 1)
+
+            prediction_R_raw = torch.cat([prediction_R_raw[:,:1,:,:], prediction_R_raw[:,:1,:,:] * chroma, prediction_R_raw[:,1:,:,:]], 1)
         if self.human_judgement_gray:
             if self.gpu_ids and isinstance(prediction_R_raw, torch.cuda.FloatTensor):
                 prediction_R_human = nn.parallel.data_parallel(self.netG.rgb_to_human_gray, prediction_R_raw, self.gpu_ids)
