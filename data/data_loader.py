@@ -15,6 +15,13 @@ def CreateDataLoader(_root, _list_dir):
     # data_loader.initialize(opt)
     return data_loader
 
+def CreateDataLoaderRelight(_root, batch_size=16):
+    data_loader = None
+    from data.aligned_data_loader import RelightingTestDataLoader
+    data_loader = RelightingTestDataLoader(_root, batch_size=batch_size)
+
+    return data_loader
+
 def CreateDataLoaderIIW(_root, _list_dir, mode, batch_size=16):
     data_loader = None
     from data.aligned_data_loader import IIWDataLoader

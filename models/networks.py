@@ -130,18 +130,18 @@ class ResidualNetwork(nn.Module):
         return self.adjust_model(x) + passforward
 
 
-def get_human_pair_classifier(in_dim, model_type, bilinear):
+def get_human_pair_classifier(in_dim, model_type, bilinear, num_layers, inner_dim):
     if model_type == 'ternary':
-        return HumanPairClassifier(in_dim, model_type, bilinear)
+        return HumanPairClassifier(in_dim, model_type, bilinear, num_layers, inner_dim)
     elif model_type == 'binary':
-        return HumanPairClassifier(in_dim, model_type, bilinear)
+        return HumanPairClassifier(in_dim, model_type, bilinear, num_layers, inner_dim)
     elif model_type == 'single_score':
-        return SingleScoreHumanClassifier(in_dim, model_type, False, bilinear)
+        return SingleScoreHumanClassifier(in_dim, model_type, False, bilinear, num_layers, inner_dim)
     elif model_type == 'single_score_const_thresh':
-        return SingleScoreHumanClassifier(in_dim, 'single_score', True, bilinear)
+        return SingleScoreHumanClassifier(in_dim, 'single_score', True, bilinear, num_layers, inner_dim)
 
 class HumanPairClassifier(nn.Module):
-    def __init__(self, in_dim, model_type, bilinear=False):
+    def __init__(self, in_dim, model_type, bilinear=False, inner_layers = -1, inner_dim = 32):
         super(HumanPairClassifier, self).__init__()
         self.model_type = model_type
         self.bilinear = bilinear
@@ -151,12 +151,21 @@ class HumanPairClassifier(nn.Module):
         else:
             in_dim = 2 * in_dim
 
-        if model_type == 'ternary':
-            self.model = nn.Sequential(nn.Linear(in_dim, 3))
-            #self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16, 3))
-        elif model_type == 'binary':
-            self.model = nn.Sequential(nn.Linear(in_dim, 2))
-            #self.model = nn.Sequential(nn.Linear(in_dim * 2, 8), nn.ReLU(), nn.Linear(8, 16), nn.ReLU(), nn.Linear(16, 2))
+        if model_type == 'binary':
+            out_dim = 2
+        elif model_type == 'ternary':
+            out_dim = 3
+
+        if inner_layers < 0:
+            self.model = nn.Sequential(nn.Linear(in_dim, out_dim))
+        else:
+            model_list = [nn.Linear(in_dim, inner_dim*(2**inner_layers)), nn.ReLU()]
+            for i in range(inner_layers):
+                model_list.append(nn.Linear(inner_dim*(2**(inner_layers-i)), inner_dim * (2 ** (inner_layers - (i+1)))))
+                model_list.append(nn.ReLU())
+            model_list.append(nn.Linear(inner_dim, out_dim))
+            self.model = nn.Sequential(*model_list)
+
 
     def forward(self, X):
         if self.bilinear:
@@ -166,15 +175,26 @@ class HumanPairClassifier(nn.Module):
             return self.model(X)
 
 class SingleScoreHumanClassifier(nn.Module):
-    def __init__(self, in_dim, model_type, const_threshold = False, bilinear = False):
+    def __init__(self, in_dim, model_type, const_threshold = False, bilinear = False, inner_layers = -1, inner_dim=32):
         super(SingleScoreHumanClassifier, self).__init__()
         self.model_type = model_type
         self.bilinear = bilinear
-        if bilinear:
-            self.single_score = nn.Linear(in_dim * 2 + (2*in_dim)**2, 1)
-        else:
-            self.single_score = nn.Linear(in_dim * 2, 1)
 
+        if bilinear:
+            in_dim = in_dim * 2 + (2*in_dim)**2
+        else:
+            in_dim = in_dim * 2
+
+
+        if inner_layers < 0:
+            self.single_score = nn.Linear(in_dim, 1)
+        else:
+            model_list = [nn.Linear(in_dim, inner_dim*(2**inner_layers)), nn.ReLU()]
+            for i in range(inner_layers):
+                model_list.append(nn.Linear(inner_dim*(2**(inner_layers-i)), inner_dim * (2 ** (inner_layers - (i+1)))))
+                model_list.append(nn.ReLU())
+            model_list.append(nn.Linear(inner_dim, 1))
+            self.single_score = nn.Sequential(*model_list)
 
         if const_threshold:
             self.register_buffer('threshold', torch.Tensor([0.0]))
@@ -494,8 +514,11 @@ class JointLoss(nn.Module):
 
     def BatchHumanBinaryClassifierLoss(self, prediction_R, judgements_eq, judgements_ineq, random_filp, human_pair_classifier):
         # human_pair_classifier should return two binary classifiers.  0th for "is equal" and 1st for "left or right"
-        ce_loss = nn.CrossEntropyLoss(reduction='none')
-        ce_loss.cuda()
+        #ce_loss = nn.CrossEntropyLoss(reduction='none')
+        #ce_loss.cuda()
+
+        bce_loss = nn.BCEWithLogitsLoss(reduction='none')
+        bce_loss.cuda()
 
         eq_loss, ineq_eq_loss, ineq_pr_loss = 0, 0, 0
         num_valid_eq = 0
@@ -505,10 +528,10 @@ class JointLoss(nn.Module):
         if judgements_eq.size(1) > 2:
             judgements_eq = judgements_eq.cuda()
             feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_eq, random_filp)
-            gt_eq = gt * 0
+            #gt_eq = gt * 0
 
-            eq_loss = torch.sum(weight * ce_loss(human_pair_classifier(torch.cat([feat_1, feat_2], 1)), gt_eq.long()))
-            num_valid_eq = torch.sum(weight)
+            #eq_loss = torch.sum(weight * bce_loss(human_pair_classifier(torch.cat([feat_1, feat_2], 1)), gt_eq.long()))
+            #num_valid_eq = torch.sum(weight)
 
             human_label = human_pair_classifier(torch.cat([feat_1, feat_2], 1))
             hl = human_label[:,0]
@@ -1294,37 +1317,38 @@ class JointLoss(nn.Module):
 
         if data_set_name == "IIW":
             print("IIW Loss")
-            num_images = prediction_R.size(0)
-            # Albedo smoothness term
-            # rs_loss =  self.w_rs_dense * self.BilateralRefSmoothnessLoss(prediction_R, targets, 'R', 5)
-            # multi-scale smoothness term
-            prediction_R_1 = prediction_R[:,:,::2,::2]
-            prediction_R_2 = prediction_R_1[:,:,::2,::2]
-            prediction_R_3 = prediction_R_2[:,:,::2,::2]
+            if not self.opt.pretrained_cgi:
+                num_images = prediction_R.size(0)
+                # Albedo smoothness term
+                # rs_loss =  self.w_rs_dense * self.BilateralRefSmoothnessLoss(prediction_R, targets, 'R', 5)
+                # multi-scale smoothness term
+                prediction_R_1 = prediction_R[:,:,::2,::2]
+                prediction_R_2 = prediction_R_1[:,:,::2,::2]
+                prediction_R_3 = prediction_R_2[:,:,::2,::2]
 
-            rs_loss = self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R, targets,0)
-            rs_loss = rs_loss +  0.5 * self.w_rs_local * self.LocalAlebdoSmoothenessLoss(prediction_R_1, targets,1)
-            rs_loss = rs_loss +  0.3333 * self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R_2, targets,2)
-            rs_loss = rs_loss +  0.25 * self.w_rs_local   * self.LocalAlebdoSmoothenessLoss(prediction_R_3, targets,3)
+                rs_loss = self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R, targets,0)
+                rs_loss = rs_loss +  0.5 * self.w_rs_local * self.LocalAlebdoSmoothenessLoss(prediction_R_1, targets,1)
+                rs_loss = rs_loss +  0.3333 * self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R_2, targets,2)
+                rs_loss = rs_loss +  0.25 * self.w_rs_local   * self.LocalAlebdoSmoothenessLoss(prediction_R_3, targets,3)
 
-            prediction_R_human_1 = prediction_R_human[:,:,::2,::2]
-            prediction_R_human_2 = prediction_R_human_1[:,:,::2,::2]
-            prediction_R_human_3 = prediction_R_human_2[:,:,::2,::2]
+                prediction_R_human_1 = prediction_R_human[:,:,::2,::2]
+                prediction_R_human_2 = prediction_R_human_1[:,:,::2,::2]
+                prediction_R_human_3 = prediction_R_human_2[:,:,::2,::2]
 
-            rs_human_loss = self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R_human, targets,0)
-            rs_human_loss = rs_human_loss +  0.5 * self.w_rs_local * self.LocalAlebdoSmoothenessLoss(prediction_R_human_1, targets,1)
-            rs_human_loss = rs_human_loss +  0.3333 * self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R_human_2, targets,2)
-            rs_human_loss = rs_human_loss +  0.25 * self.w_rs_local   * self.LocalAlebdoSmoothenessLoss(prediction_R_human_3, targets,3)
+                rs_human_loss = self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R_human, targets,0)
+                rs_human_loss = rs_human_loss +  0.5 * self.w_rs_local * self.LocalAlebdoSmoothenessLoss(prediction_R_human_1, targets,1)
+                rs_human_loss = rs_human_loss +  0.3333 * self.w_rs_local  * self.LocalAlebdoSmoothenessLoss(prediction_R_human_2, targets,2)
+                rs_human_loss = rs_human_loss +  0.25 * self.w_rs_local   * self.LocalAlebdoSmoothenessLoss(prediction_R_human_3, targets,3)
 
-            rs_loss = rs_loss * .5 + rs_human_loss + .5
+                rs_loss = rs_loss * .5 + rs_human_loss + .5
 
-            #similarity = self.w_human_similarity * (torch.abs(prediction_R.detach() - prediction_R_human)).mean()
+                #similarity = self.w_human_similarity * (torch.abs(prediction_R.detach() - prediction_R_human)).mean()
 
-            # # Lighting smoothness Loss
-            ss_loss = self.w_ss_dense * self.BilateralRefSmoothnessLoss(prediction_S, targets, 'S', 2)
-            # # Reconstruction Loss
-            reconstr_loss = self.w_reconstr_real * self.IIWReconstLoss(torch.exp(prediction_R), \
-                                                    torch.exp(prediction_S), targets)
+                # # Lighting smoothness Loss
+                ss_loss = self.w_ss_dense * self.BilateralRefSmoothnessLoss(prediction_S, targets, 'S', 2)
+                # # Reconstruction Loss
+                reconstr_loss = self.w_reconstr_real * self.IIWReconstLoss(torch.exp(prediction_R), \
+                                                        torch.exp(prediction_S), targets)
 
             # IIW Loss
             if self.opt.detach_iiw_loss:
@@ -1345,7 +1369,10 @@ class JointLoss(nn.Module):
             # print("ss_loss ", ss_loss.data[0])
             # print("total_iiw_loss ", total_iiw_loss.data[0])
 
-            total_loss = total_iiw_loss + reconstr_loss + rs_loss + ss_loss
+            if self.opt.pretrained_cgi:
+                total_loss = total_iiw_loss + 0 * prediction_R.sum() + 0 * prediction_S.sum() + 0 * prediction_R_human.sum()
+            else:
+                total_loss = total_iiw_loss + reconstr_loss + rs_loss + ss_loss
 
         elif data_set_name == "Render":
             print("Render LOSS")
@@ -1666,7 +1693,7 @@ class JointLoss(nn.Module):
                     whdrs.append(whdr)
                     whdrs_eq.append(whdr_eq)
                     whdrs_ineq.append(whdr_ineq)
-            else:
+            elif human_classifier.model_type == 'binary':
                 for t in thresholds:
                     if t == 0:
                         eq_threshold = -10000
@@ -1679,6 +1706,13 @@ class JointLoss(nn.Module):
                     whdrs.append(whdr)
                     whdrs_eq.append(whdr_eq)
                     whdrs_ineq.append(whdr_ineq)
+            else:
+                eq_threshold = 0.0
+
+                whdr, whdr_eq, whdr_ineq = self.compute_whdr_classifier(prediction_R_np, judgements, human_classifier, eq_threshold)
+                whdrs.append(whdr)
+                whdrs_eq.append(whdr_eq)
+                whdrs_ineq.append(whdr_ineq)
 
             total_whdr += np.array(whdrs)
             total_whdr_eq += np.array(whdrs_eq)

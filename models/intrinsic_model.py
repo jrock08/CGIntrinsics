@@ -73,8 +73,20 @@ class Intrinsics_Model(BaseModel):
                 rgb_to_human_gray.cuda(opt.gpu_ids[0])
             model.rgb_to_human_gray = rgb_to_human_gray
 
+
+        self.netG = model
+
+        if opt.continue_train:
+            model_parameters = self.load_network('base_model', 'G', 'best')
+
+            for key in model_parameters:
+                if key[:3] == 'hpc':
+                    del model_parameters[key]
+
+            model.load_state_dict(model_parameters)
+
         if opt.human_pair_classifier:
-            model.hpc = networks.get_human_pair_classifier(output_nc * opt.num_pyr_levels, opt.human_pair_classifier_type, opt.bilinear_classifier)
+            model.hpc = networks.get_human_pair_classifier(output_nc * opt.num_pyr_levels, opt.human_pair_classifier_type, opt.bilinear_classifier, opt.human_classifier_layers, opt.human_classifier_inner_dim)
             #model.hpc = networks.HumanPairClassifier(output_nc, opt.human_pair_classifier_type)
 
             if len(opt.gpu_ids) > 0:
@@ -82,12 +94,16 @@ class Intrinsics_Model(BaseModel):
         else:
             model.hpc = None
 
-        self.netG = model
-
         # TESTING
         if not self.isTrain:
             # TODO: won't work with the pretrained model anymore
-            model_parameters = self.load_network(model, 'G', opt.which_epoch)
+            model_parameters = self.load_network(self.sub_name, 'G', opt.which_epoch)
+
+            if model.hpc is None:
+                for key in model_parameters:
+                    if key[:3] == 'hpc':
+                        del model_parameters[key]
+
             model.load_state_dict(model_parameters)
         else:
             self.lr = opt.lr
@@ -207,14 +223,19 @@ class Intrinsics_Model(BaseModel):
         input_images = Variable(input_.cuda() , requires_grad = False)
         prediction_R, prediction_R_human, prediction_S = self.forward_eval(input_images)
 
-        chroma = input_images / torch.clamp(torch.sum(input_images,1,keepdim=True), min=1e-8)
-        prediction_RGB = torch.exp(prediction_R.detach()) * chroma
+        chroma = input_images / torch.clamp(torch.sum(input_images,1,keepdim=True), min=1e-2)
+        prediction_RGB = (torch.exp(prediction_R.detach()) * chroma).clamp(min=0,max=1)
 
         return self.criterion_joint.evaluate_WHDR(prediction_R_human, targets, threshold, self.netG.hpc), prediction_RGB
 
     def get_output_images(self, input_):
         input_images = Variable(input_.cuda() , requires_grad = False)
         prediction_R, prediction_R_human, prediction_S = self.forward_eval(input_images)
+
+        chroma = input_images / torch.clamp(torch.sum(input_images,1,keepdim=True), min=1e-2)
+        prediction_RGB = torch.exp(prediction_R[:,0,:,:].detach()) * chroma
+
+        return torch.exp(prediction_R[:,0,:,:]), prediction_RGB, torch.exp(prediction_S)
 
     def switch_to_train(self):
         self.netG.train()

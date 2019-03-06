@@ -25,8 +25,8 @@ def test_iiw(model, list_name):
     model.switch_to_eval()
 
     outp = []
-    #thresholds = np.linspace(0,1,15)
-    thresholds = [.1]
+    thresholds = np.linspace(0,1,15)
+    #thresholds = [.1]
     total_loss = np.zeros(len(thresholds))
     total_loss_eq = np.zeros(len(thresholds))
     total_loss_ineq = np.zeros(len(thresholds))
@@ -62,7 +62,8 @@ def test_iiw(model, list_name):
 
 
 #print("WE ARE IN TESTING PHASE!!!!")
-outp = test_iiw(model, 'train_val_list/val_list/')
+#outp = test_iiw(model, 'train_val_list/val_list/')
+outp = test_iiw(model, 'test_list/')
 with open('val_whdr.txt','a') as f:
     f.write('WHDR {}\n'.format(outp[0]))
 print 'WHDR {}'.format(outp[0])

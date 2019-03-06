@@ -24,9 +24,9 @@ DEBUG = opt.debug
 batch_size = 5*len(opt.gpu_ids)
 print 'batch_size: {}'.format(batch_size)
 #batch_size = 4
-train_on_IIW = True
-train_on_SAW = False
-
+train_on_CGI = not (opt.pretrained_cgi)
+train_on_IIW = opt.IIW
+train_on_SAW = opt.SAW
 
 #root = "/home/zl548/phoenix24/"
 full_root = '/data/jrock/IIW_2019/'
@@ -35,6 +35,7 @@ train_list_CGIntrinsics = full_root + '/CGIntrinsics/intrinsics_final/train_val_
 data_loader_S = CreateDataLoaderCGIntrinsics(full_root, train_list_CGIntrinsics, batch_size)
 dataset_CGIntrinsics = data_loader_S.load_data()
 dataset_size_CGIntrinsics = len(data_loader_S)
+iterator_CGI = iter(dataset_CGIntrinsics)
 
 val_list_CGIntrinsics = full_root + '/CGIntrinsics/intrinsics_final/train_val_list/val_list/'
 data_loader_val_CGI = CreateDataLoaderCGIntrinsicsTest(full_root, val_list_CGIntrinsics, batch_size)
@@ -48,10 +49,10 @@ dataset_val_size_CGIntrinsics = len(data_loader_val_CGI)
 #    print '{}: time {}'.format(j,en-st)
 
 # TODO: This data has some issues that still need to be figured out.
-#train_list_Render = full_root + '/CGIntrinsics/intrinsics_final/render_list/'
-#data_loader_Render = CreateDataLoaderRender(full_root, train_list_Render, batch_size)
-#dataset_Render = data_loader_Render.load_data()
-#iterator_Render = iter(dataset_Render)
+train_list_Render = full_root + '/CGIntrinsics/intrinsics_final/render_list/'
+data_loader_Render = CreateDataLoaderRender(full_root, train_list_Render, 1)
+dataset_Render = data_loader_Render.load_data()
+iterator_Render = iter(dataset_Render)
 
 if train_on_IIW:
     train_list_IIW = full_root + '/CGIntrinsics/IIW/train_val_list/train_list/'
@@ -104,42 +105,27 @@ count_saw = 0
 count_iiw = 0
 num_orientation = 5
 
-#import time
-#print 'checking how long it takes to load data'
-#st = time.time()
-#for j, data_val in enumerate(dataset_val_CGIntrinsics):
-#    print j
-#    if DEBUG and j >= 4:
-#        break
-#en = time.time()
-#print 'loading CGIntrinsics data takes {}'.format((en-st) / j)
-#
-#st = time.time()
-#for j, data_val in enumerate(dataset_val_IIW):
-#    print j
-#    if DEBUG and j >= 4:
-#        break
-#en = time.time()
-#print 'loading IIW data takes {} time'.format((en-st) / j)
-
 for epoch in range(0, 50):
     if epoch > 0 and epoch % 2 ==0:
         model.scaled_learning_rate(rate=2.)
 
-    for i, data in enumerate(dataset_CGIntrinsics):
+    for i in range(num_iterations):
+    #for i, data in enumerate(dataset_CGIntrinsics):
 
         if (not DEBUG) and total_steps % validation_t == (validation_t - 1) or DEBUG and total_steps % validation_t == 0:
             model.switch_to_eval()
-            CGI_val_loss = 0
-            data_set_name = 'CGIntrinsics'
-            for j, data_val in enumerate(dataset_val_CGIntrinsics):
-                stacked_img = data_val['img_1']
-                targets = data_val['target_1']
 
-                model.set_input(stacked_img, targets)
-                CGI_val_loss += model.val_eval_loss(epoch, data_set_name) / dataset_val_size_CGIntrinsics
-                if DEBUG and j > 3:
-                    break
+            CGI_val_loss = 0
+            if train_on_CGI:
+                data_set_name = 'CGIntrinsics'
+                for j, data_val in enumerate(dataset_val_CGIntrinsics):
+                    stacked_img = data_val['img_1']
+                    targets = data_val['target_1']
+
+                    model.set_input(stacked_img, targets)
+                    CGI_val_loss += model.val_eval_loss(epoch, data_set_name) / dataset_val_size_CGIntrinsics
+                    if DEBUG and j > 3:
+                        break
 
             IIW_val_loss = 0
             if train_on_IIW:
@@ -163,13 +149,20 @@ for epoch in range(0, 50):
                 best_epoch = epoch
                 model.save('best')
 
-        print('CGIntrinsics Intrinsics: epoch %d, iteration %d, best_loss %f num_iterations %d best_epoch %d' % (epoch, i, best_loss, num_iterations, best_epoch) )
-        stacked_img = data['img_1']
-        targets = data['target_1']
+        if train_on_CGI:
+            data = next(iterator_CGI, None)
 
-        data_set_name = 'CGIntrinsics'
-        model.set_input(stacked_img, targets)
-        model.optimize_intrinsics(epoch, data_set_name)
+            if data is None:
+                iterator_CGI = iter(dataset_CGIntrinsics)
+                data = next(iterator_CGI, None)
+
+            print('CGIntrinsics Intrinsics: epoch %d, iteration %d, best_loss %f num_iterations %d best_epoch %d' % (epoch, i, best_loss, num_iterations, best_epoch) )
+            stacked_img = data['img_1']
+            targets = data['target_1']
+
+            data_set_name = 'CGIntrinsics'
+            model.set_input(stacked_img, targets)
+            model.optimize_intrinsics(epoch, data_set_name)
 
         if train_on_IIW:
             print('IIW Intrinsics: %d epoch %d, iteration %d, best_loss %f num_iterations %d best_epoch %d' % (count_iiw%num_orientation, epoch, i, best_loss, num_iterations, best_epoch) )
@@ -207,25 +200,26 @@ for epoch in range(0, 50):
             model.set_input(stacked_img, targets)
             model.optimize_intrinsics(epoch, data_set_name)
 
-        ## Optimize for small number of super high quality rendered images
-        #os_t += 1
-        #if os_t % 10 == 0:
-        #    # START Opedsurface
-        #    data_R = next(iterator_Render, None)
-        #    # end of one epoch 
-        #    if data_R is None:
-        #        iterator_Render = iter(dataset_Render)
-        #        data_R = next(iterator_Render, None)
+        if train_on_CGI:
+            ## Optimize for small number of super high quality rendered images
+            os_t += 1
+            if os_t % 10 == 0:
+                # START Opedsurface
+                data_R = next(iterator_Render, None)
+                # end of one epoch 
+                if data_R is None:
+                    iterator_Render = iter(dataset_Render)
+                    data_R = next(iterator_Render, None)
 
-        #    stacked_img_OS= data_R['img_1']
-        #    targets_OS = data_R['target_1']
-        #    data_set_name = 'Render'
+                stacked_img_OS= data_R['img_1']
+                targets_OS = data_R['target_1']
+                data_set_name = 'Render'
 
-        #    model.set_input(stacked_img_OS, targets_OS)
-        #    model.optimize_intrinsics(epoch, data_set_name)
+                model.set_input(stacked_img_OS, targets_OS)
+                model.optimize_intrinsics(epoch, data_set_name)
 
-        #    print('Render: epoch %d, iteration %d, best_loss %f num_iterations %d best_epoch %d' % (epoch, i, best_loss, num_iterations, best_epoch) )
-        #    #  END Rendering
+                print('Render: epoch %d, iteration %d, best_loss %f num_iterations %d best_epoch %d' % (epoch, i, best_loss, num_iterations, best_epoch) )
+                #  END Rendering
 
         total_steps += 1
     model.save('%d'%(epoch))

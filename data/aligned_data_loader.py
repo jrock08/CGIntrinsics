@@ -3,6 +3,7 @@ import numpy as np
 import torch.utils.data
 from data.base_data_loader import BaseDataLoader
 from data.image_folder import *
+from relighting_image_folder import RelightingImageFolder
 import scipy.io as sio
 from builtins import object
 import sys
@@ -38,6 +39,16 @@ def my_collate(batch, field_skip = ['eq_mat','ineq_mat', 'gt_eq_mat', 'gt_ineq_m
     else:
         default_collate(batch)
 
+class RelightingTestData(object):
+    def __init__(self, data_loader):
+        self.data_loader = data_loader
+
+    def __iter__(self):
+        self.data_loader_iter = iter(self.data_loader)
+        return self
+
+    def __next__(self):
+        return next(self.data_loader_iter)
 
 class IIWTestData(object):
     def __init__(self, data_loader):
@@ -418,6 +429,23 @@ class RenderDataLoader(BaseDataLoader):
 
     def __len__(self):
         return len(self.dataset)
+
+class RelightingTestDataLoader(BaseDataLoader):
+    def __init__(self, _root, batch_size=16):
+        dataset = RelightingImageFolder(root=_root, transform=None, loader=None)
+        data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers = int(NUM_WORKERS))
+        self.dataset = dataset
+        self.relighting_data = RelightingTestData(data_loader)
+
+    def name(self):
+        return 'RelightingTestDataLoader'
+
+    def load_data(self):
+        return self.relighting_data
+
+    def __len__(self):
+        return len(self.dataset)
+
 
 class IIWTESTDataLoader(BaseDataLoader):
     def __init__(self,_root, _list_dir, mode, batch_size=16):

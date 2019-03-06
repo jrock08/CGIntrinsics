@@ -43,6 +43,9 @@ class BaseOptions(object):
         self.parser.add_argument('--human_judgement_model', type=str, default='mlp', help='simple, mlp, or residual, must also set human_judgement_gray')
         self.parser.add_argument('--human_pair_classifier', action='store_true', help='rather than using image ratios, use a small MLP to predict which pixel is brighter')
         self.parser.add_argument('--human_pair_classifier_type', type=str, default='ternary', help='ternary, binary, single_score, single_score_const_thresh')
+
+        self.parser.add_argument('--human_classifier_layers', type=int, default=-1)
+        self.parser.add_argument('--human_classifier_inner_dim', type=int, default=32)
         self.parser.add_argument('--bilinear_classifier',action='store_true')
 
         self.parser.add_argument('--output_reflectance_dim', type=int, default=-1)
@@ -52,6 +55,7 @@ class BaseOptions(object):
         self.parser.add_argument('--detach_iiw_loss', action='store_true')
         self.parser.add_argument('--use_base_IIW', action='store_true')
 
+
         self.initialized = True
 
     def parse(self):
@@ -59,6 +63,8 @@ class BaseOptions(object):
             self.initialize()
         self.opt = self.parser.parse_args()
         self.opt.isTrain = self.isTrain   # train or test
+        if not self.isTrain:
+            self.opt.continue_train = False
 
         str_ids = self.opt.gpu_ids.split(',')
         self.opt.gpu_ids = []
