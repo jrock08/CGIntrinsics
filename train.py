@@ -105,13 +105,14 @@ count_saw = 0
 count_iiw = 0
 num_orientation = 5
 
-for epoch in range(0, 50):
+for epoch in range(0, opt.num_train_epochs):
     if epoch > 0 and epoch % 2 ==0:
         model.scaled_learning_rate(rate=2.)
 
-    for i in range(num_iterations):
-    #for i, data in enumerate(dataset_CGIntrinsics):
+    if epoch > 0 and opt.progressive_iiw_weight:
+        model.criterion_joint.w_IIW *= 1.15
 
+    for i in range(num_iterations):
         if (not DEBUG) and total_steps % validation_t == (validation_t - 1) or DEBUG and total_steps % validation_t == 0:
             model.switch_to_eval()
 

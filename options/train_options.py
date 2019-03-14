@@ -25,6 +25,9 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument('--IIW', action='store_true')
         self.parser.add_argument('--SAW', action='store_true')
         self.parser.add_argument('--pretrained_cgi', action='store_true', help='drastically changes how to think about the training, instead of all training at once, assumption is you have a fixed image-to-image model, and you just need to train some ancilary stuff that does IIW.  This removes a bunch of the losses related to smoothness and turns off CGI during training.')
+        self.parser.add_argument('--hot_start', action='store_true')
+        self.parser.add_argument('--progressive_iiw_weight', action='store_true')
+        self.parser.add_argument('--num_train_epochs', type=int, default=50)
         # NOT-IMPLEMENTED self.parser.add_argument('--preprocessing', type=str, default='resize_and_crop', help='resizing/cropping strategy')
         self.isTrain = True
 

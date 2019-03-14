@@ -94,6 +94,10 @@ class Intrinsics_Model(BaseModel):
         else:
             model.hpc = None
 
+        if self.isTrain and opt.hot_start:
+            model_parameters = self.load_network(self.sub_name, 'G', 'best')
+            model.load_state_dict(model_parameters)
+
         # TESTING
         if not self.isTrain:
             # TODO: won't work with the pretrained model anymore

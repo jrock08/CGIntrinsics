@@ -1,24 +1,15 @@
 import time
 import torch
 import numpy as np
-from options.test_options import TestOptions
 import sys, traceback
 import h5py
 from data.data_loader import CreateDataLoader
-from models.models import create_model
 from data.data_loader import CreateDataLoaderRelight
 import torchvision
-import pandas
 from PIL import Image
-from scipy import stats
-
-opt = TestOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
-
-full_root = '/data/jrock/Relighting_2019/'
-model = create_model(opt)
 
 
-def test_iiw(model):
+def test_relight(model, full_root = '/data/jrock/Relighting_2019/'):
     # print("============================= Validation ============================")
     model.switch_to_eval()
 
@@ -73,24 +64,33 @@ def test_iiw(model):
     return outp
 
 
-#print("WE ARE IN TESTING PHASE!!!!")
-#outp = test_iiw(model, 'train_val_list/val_list/')
-outp = test_iiw(model)
-df = pandas.DataFrame(outp, columns=['scene','img1','img2','score_relight','score_recon'])
-df.to_pickle('scores_df.pkl')
+if __name__ == '__main__':
+    from options.test_options import TestOptions
+    from models.models import create_model
+    import pandas
+    from scipy import stats
 
-for img_id in range(10):
-    Z = df[(df['img1'] == 'img_%d'%(img_id)) | (df['img2'] == 'img_%d'%(img_id))].groupby('scene')['score_relight','score_recon'].agg(stats.gmean)
-    print 'img_contribution: %d'%(img_id)
-    print Z
+    opt = TestOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
+    model = create_model(opt)
 
-print 'overall:'
-print df.groupby('scene')[['score_relight','score_recon']].agg(stats.gmean)
+    #print("WE ARE IN TESTING PHASE!!!!")
+    #outp = test_relight(model, 'train_val_list/val_list/')
+    outp = test_relight(model)
+    df = pandas.DataFrame(outp, columns=['scene','img1','img2','score_relight','score_recon'])
+    df.to_pickle('scores_df.pkl')
 
-#for WHDR, WHDR_EQ, WHDR_INEQ in outp:
-#    print('WHDR %f'%WHDR)
+    for img_id in range(10):
+        Z = df[(df['img1'] == 'img_%d'%(img_id)) | (df['img2'] == 'img_%d'%(img_id))].groupby('scene')['score_relight','score_recon'].agg(stats.gmean)
+        print 'img_contribution: %d'%(img_id)
+        print Z
 
-#WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'test_list/')
-#WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'train_val_list/val_list/')
+    print 'overall:'
+    print df.groupby('scene')[['score_relight','score_recon']].agg(stats.gmean)
 
-print("We are done")
+    #for WHDR, WHDR_EQ, WHDR_INEQ in outp:
+    #    print('WHDR %f'%WHDR)
+
+    #WHDR, WHDR_EQ, WHDR_INEQ = test_relight(model, 'test_list/')
+    #WHDR, WHDR_EQ, WHDR_INEQ = test_relight(model, 'train_val_list/val_list/')
+
+    print("We are done")

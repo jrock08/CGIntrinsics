@@ -11,22 +11,17 @@ from data.data_loader import CreateDataLoaderIIWTest
 from data.data_loader import CreateDataLoaderIIW
 import torchvision
 
-opt = TestOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
-
-#root = "/home/zl548/phoenix24/"
-#full_root = root +'/phoenix/S6/zl548/'
-
-full_root = '/data/jrock/IIW_2019/'
-model = create_model(opt)
 
 
-def test_iiw(model, list_name):
+def test_iiw(model, list_name, full_root = '/data/jrock/IIW_2019/', thresholds = None):
     # print("============================= Validation ============================")
     model.switch_to_eval()
 
     outp = []
-    thresholds = np.linspace(0,1,15)
-    #thresholds = [.1]
+    #thresholds = np.linspace(0,1,15)
+    if thresholds is None:
+        thresholds = [.5]
+    #thresholds = [.22]
     total_loss = np.zeros(len(thresholds))
     total_loss_eq = np.zeros(len(thresholds))
     total_loss_ineq = np.zeros(len(thresholds))
@@ -60,19 +55,23 @@ def test_iiw(model, list_name):
 
     return total_loss/(total_count), total_loss_eq/total_count, total_loss_ineq/total_count
 
+if __name__ == '__main__':
+    opt = TestOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
 
-#print("WE ARE IN TESTING PHASE!!!!")
-#outp = test_iiw(model, 'train_val_list/val_list/')
-outp = test_iiw(model, 'test_list/')
-with open('val_whdr.txt','a') as f:
-    f.write('WHDR {}\n'.format(outp[0]))
-print 'WHDR {}'.format(outp[0])
-print 'WHDR_EQ {}'.format(outp[1])
-print 'WHDR_INEQ {}'.format(outp[2])
-#for WHDR, WHDR_EQ, WHDR_INEQ in outp:
-#    print('WHDR %f'%WHDR)
+    model = create_model(opt)
 
-#WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'test_list/')
-#WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'train_val_list/val_list/')
+    #print("WE ARE IN TESTING PHASE!!!!")
+    #outp = test_iiw(model, 'train_val_list/val_list/')
+    outp = test_iiw(model, 'test_list/', thresholds=opt.whdr_thresholds)
+    with open('val_whdr.txt','a') as f:
+        f.write('WHDR {}\n'.format(outp[0]))
+    print 'WHDR {}'.format(outp[0])
+    print 'WHDR_EQ {}'.format(outp[1])
+    print 'WHDR_INEQ {}'.format(outp[2])
+    #for WHDR, WHDR_EQ, WHDR_INEQ in outp:
+    #    print('WHDR %f'%WHDR)
 
-print("We are done")
+    #WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'test_list/')
+    #WHDR, WHDR_EQ, WHDR_INEQ = test_iiw(model, 'train_val_list/val_list/')
+
+    print("We are done")
