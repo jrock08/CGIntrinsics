@@ -11,7 +11,7 @@ import json
 # from . import resnet1
 import matplotlib.pyplot as plt
 from skimage.transform import resize
-from gaussian import GaussianPyramid
+from models.gaussian import GaussianPyramid
 
 ###############################################################################
 # Functions
@@ -660,7 +660,7 @@ class JointLoss(nn.Module):
                 pred_hist = ineq_hist
                 gt_hist = gt_ineq_hist
 
-        print pred_hist, gt_hist
+        print(pred_hist, gt_hist)
         # avoid divide by zero
         #print 'eq, ineq', eq_loss/(num_valid_eq + 1e-8), ineq_loss/(num_valid_ineq + 1e-8)
         # equal weight to eq, >, < for image
@@ -1588,7 +1588,7 @@ class JointLoss(nn.Module):
 
             weight_sum += weight
 
-        print counts, gt_counts
+        print(counts, gt_counts)
 
         if weight_sum:
             return (error_sum / weight_sum), error_equal_sum/( weight_equal_sum + 1e-10), error_inequal_sum/(weight_inequal_sum + 1e-10)

@@ -3,7 +3,7 @@ import numpy as np
 import torch.utils.data
 from data.base_data_loader import BaseDataLoader
 from data.image_folder import *
-from relighting_image_folder import RelightingImageFolder
+from data.relighting_image_folder import RelightingImageFolder
 import scipy.io as sio
 from builtins import object
 import sys

@@ -22,7 +22,7 @@ opt = TrainOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
 
 DEBUG = opt.debug
 batch_size = 5*len(opt.gpu_ids)
-print 'batch_size: {}'.format(batch_size)
+print('batch_size: {}'.format(batch_size))
 #batch_size = 4
 train_on_CGI = not (opt.pretrained_cgi)
 train_on_IIW = opt.IIW
@@ -112,7 +112,7 @@ for epoch in range(0, opt.num_train_epochs):
     if epoch > 0 and opt.progressive_iiw_weight:
         model.criterion_joint.w_IIW *= 1.15
 
-    for i in range(num_iterations):
+    for i in range(int(num_iterations)):
         if (not DEBUG) and total_steps % validation_t == (validation_t - 1) or DEBUG and total_steps % validation_t == 0:
             model.switch_to_eval()
 
@@ -140,8 +140,8 @@ for epoch in range(0, opt.num_train_epochs):
                     if DEBUG and j > 3:
                         break
 
-            print 'total CGI_val_loss is %f'%(CGI_val_loss)
-            print 'total IIW_val_loss is %f'%(IIW_val_loss)
+            print('total CGI_val_loss is %f'%(CGI_val_loss))
+            print('total IIW_val_loss is %f'%(IIW_val_loss))
 
             model.switch_to_train()
 

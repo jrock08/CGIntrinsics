@@ -59,20 +59,20 @@ def default_loader(path):
         return accimage_loader(path)
     else:
         return pil_loader(path)
- 
+
 def make_dataset(dir, class_to_idx, extensions):
     images = []
     dir = os.path.expanduser(dir)
     for target in sorted(class_to_idx.keys()):
-	d = os.path.join(dir, target)
-	if not os.path.isdir(d):
-	    continue
+        d = os.path.join(dir, target)
+        if not os.path.isdir(d):
+            continue
         images.append([])
 
-	for root, _, fnames in sorted(os.walk(d)):
-	    for fname in sorted(fnames):
-		if has_file_allowed_extension(fname, extensions):
-		    path = os.path.join(root, fname)
+        for root, _, fnames in sorted(os.walk(d)):
+            for fname in sorted(fnames):
+                if has_file_allowed_extension(fname, extensions):
+                    path = os.path.join(root, fname)
                     images[-1].append(path)
 
     return images
@@ -149,5 +149,5 @@ class RelightingImageFolder(data.Dataset):
 
 if __name__ == '__main__':
     RIF = RelightingImageFolder('BoyadzhievImageCompositingInputs/')
-    print len(RIF)
-    print RIF[0][0].shape
+    print(len(RIF))
+    print(RIF[0][0].shape)
