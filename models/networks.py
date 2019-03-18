@@ -11,7 +11,7 @@ import json
 # from . import resnet1
 import matplotlib.pyplot as plt
 from skimage.transform import resize
-from models.gaussian import GaussianPyramid
+from .gaussian import GaussianPyramid
 
 ###############################################################################
 # Functions
@@ -130,21 +130,26 @@ class ResidualNetwork(nn.Module):
         return self.adjust_model(x) + passforward
 
 
-def get_human_pair_classifier(in_dim, model_type, bilinear, num_layers, inner_dim):
+def get_human_pair_classifier(in_dim, model_type, bilinear, num_layers, inner_dim, center_surround, gpu_ids):
     if model_type == 'ternary':
-        return HumanPairClassifier(in_dim, model_type, bilinear, num_layers, inner_dim)
+        return HumanPairClassifier(in_dim, model_type, bilinear, num_layers, inner_dim, center_surround, gpu_ids)
     elif model_type == 'binary':
-        return HumanPairClassifier(in_dim, model_type, bilinear, num_layers, inner_dim)
+        return HumanPairClassifier(in_dim, model_type, bilinear, num_layers, inner_dim, center_surround, gpu_ids)
     elif model_type == 'single_score':
-        return SingleScoreHumanClassifier(in_dim, model_type, False, bilinear, num_layers, inner_dim)
+        return SingleScoreHumanClassifier(in_dim, model_type, False, bilinear, num_layers, inner_dim, center_surround, gpu_ids)
     elif model_type == 'single_score_const_thresh':
-        return SingleScoreHumanClassifier(in_dim, 'single_score', True, bilinear, num_layers, inner_dim)
+        return SingleScoreHumanClassifier(in_dim, 'single_score', True, bilinear, num_layers, inner_dim, center_surround, gpu_ids)
 
 class HumanPairClassifier(nn.Module):
-    def __init__(self, in_dim, model_type, bilinear=False, inner_layers = -1, inner_dim = 32):
+    def __init__(self, in_dim, model_type, bilinear=False, inner_layers = -1, inner_dim = 32, center_surround=False, gpu_ids = []):
         super(HumanPairClassifier, self).__init__()
         self.model_type = model_type
         self.bilinear = bilinear
+        self.center_surround = center_surround
+        self.gpu_ids = gpu_ids
+
+        if center_surround:
+            in_dim = in_dim * 2
 
         if bilinear:
             in_dim = in_dim * 2 + 2 * 2 * in_dim * in_dim
@@ -170,15 +175,26 @@ class HumanPairClassifier(nn.Module):
     def forward(self, X):
         if self.bilinear:
             Y = X.unsqueeze(1) * X.unsqueeze(2)
-            return self.model(torch.cat([X,Y.view(Y.size(0), -1)],1))
+            if self.gpu_ids and isinstance(X.data, torch.cuda.FloatTensor):
+                return nn.parallel.data_parallel(self.model, torch.cat([X,Y.view(Y.size(0),-1)],1), self.gpu_ids)
+            else:
+                return self.model(torch.cat([X,Y.view(Y.size(0), -1)],1))
         else:
-            return self.model(X)
+            if self.gpu_ids and isinstance(X.data, torch.cuda.FloatTensor):
+                return nn.parallel.data_parallel(self.model, X, self.gpu_ids)
+            else:
+                return self.model(X)
 
 class SingleScoreHumanClassifier(nn.Module):
-    def __init__(self, in_dim, model_type, const_threshold = False, bilinear = False, inner_layers = -1, inner_dim=32):
+    def __init__(self, in_dim, model_type, const_threshold = False, bilinear = False, inner_layers = -1, inner_dim=32, gpu_ids = []):
         super(SingleScoreHumanClassifier, self).__init__()
         self.model_type = model_type
         self.bilinear = bilinear
+        self.center_surround = center_surround
+        self.gpu_ids = gpu_ids
+
+        if center_surround:
+            in_dim = in_dim * 2
 
         if bilinear:
             in_dim = in_dim * 2 + (2*in_dim)**2
@@ -527,7 +543,7 @@ class JointLoss(nn.Module):
         # Collect equality annotations
         if judgements_eq.size(1) > 2:
             judgements_eq = judgements_eq.cuda()
-            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_eq, random_filp)
+            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_eq, random_filp, human_pair_classifier)
             #gt_eq = gt * 0
 
             #eq_loss = torch.sum(weight * bce_loss(human_pair_classifier(torch.cat([feat_1, feat_2], 1)), gt_eq.long()))
@@ -543,7 +559,7 @@ class JointLoss(nn.Module):
         # collect inequality annotations
         if judgements_ineq.size(1) > 2:
             judgements_ineq = judgements_ineq.cuda()
-            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_ineq, random_filp)
+            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_ineq, random_filp, human_pair_classifier)
 
             ineq_pred = human_pair_classifier(torch.cat([feat_1, feat_2],1))
             gt_ineq_eq = torch.zeros(ineq_pred.shape[0]).cuda()
@@ -556,7 +572,7 @@ class JointLoss(nn.Module):
 
         return .5 * ((eq_loss + ineq_eq_loss) / (num_valid_eq + num_valid_ineq + 1e-8) + ineq_pr_loss / (num_valid_ineq + 1e-8))
 
-    def getPyrValues(self, prediction_R, judgements, random_flip):
+    def getPyrValues(self, prediction_R, judgements, random_flip, human_pair_classifier):
         if self.pyr_levels > 1:
             gpyr = GaussianPyramid(prediction_R.size(0), self.pyr_levels)
             gpyr.cuda()
@@ -596,6 +612,49 @@ class JointLoss(nn.Module):
             points_1_vec.append(torch.index_select(R_vec, 1, Variable(p1, requires_grad = False)))
             points_2_vec.append(torch.index_select(R_vec, 1, Variable(p2, requires_grad = False)))
 
+            if human_pair_classifier.center_surround:
+                surround_1 = None
+                surround_2 = None
+                count_surround_1 = None
+                count_surround_2 = None
+
+                for xd in [-1,0,1]:
+                    for yd in [-1,0,1]:
+                        y_1d = y_1 + yd
+                        x_1d = x_1 + xd
+                        out_of_bounds_sel_1 = (x_1d.lt(0) | x_1d.ge(cols)) | (y_1d.lt(0) | y_1d.ge(rows))
+                        y_1d[out_of_bounds_sel_1] = 0
+                        x_1d[out_of_bounds_sel_1] = 0
+
+                        y_2d = y_2 + yd
+                        x_2d = x_2 + xd
+                        out_of_bounds_sel_2 = (x_2d.lt(0) | x_2d.ge(cols)) | (y_2d.lt(0) | y_2d.ge(rows))
+                        y_2d[out_of_bounds_sel_2] = 0
+                        x_2d[out_of_bounds_sel_2] = 0
+
+                        point_1_idx_linear = y_1d * cols + x_1d
+                        point_2_idx_linear = y_2d * cols + x_2d
+
+                        p1 = torch.cat([torch.masked_select(point_1_idx_linear, sel), torch.masked_select(point_2_idx_linear, 1-sel)],0)
+                        p2 = torch.cat([torch.masked_select(point_2_idx_linear, sel), torch.masked_select(point_1_idx_linear, 1-sel)],0)
+                        cs1 = torch.cat([torch.masked_select(out_of_bounds_sel_1, sel), torch.masked_select(out_of_bounds_sel_2, 1-sel)],0)
+                        cs2 = torch.cat([torch.masked_select(out_of_bounds_sel_2, sel), torch.masked_select(out_of_bounds_sel_1, 1-sel)],0)
+
+                        if surround_1 is not None:
+                            surround_1 += torch.index_select(R_vec, 1, Variable(p1, requires_grad = False)) * (1-cs1.float())
+                            surround_2 += torch.index_select(R_vec, 1, Variable(p2, requires_grad = False)) * (1-cs2.float())
+                            count_surround_1 += 1-cs1.float()
+                            count_surround_2 += 1-cs2.float()
+                        else:
+                            surround_1 = torch.index_select(R_vec, 1, Variable(p1, requires_grad = False)) * (1-cs1.float())
+                            surround_2 = torch.index_select(R_vec, 1, Variable(p2, requires_grad = False)) * (1-cs2.float())
+                            count_surround_1 = 1-cs1.float()
+                            count_surround_2 = 1-cs2.float()
+
+                points_1_vec[-1] =  torch.cat([points_1_vec[-1], surround_1 / count_surround_1], 0)
+                points_2_vec[-1] =  torch.cat([points_2_vec[-1], surround_2 / count_surround_2], 0)
+
+
         weight = Variable(judgements[:,4], requires_grad = False)
         gt_swapped = torch.cat([torch.zeros(torch.sum(sel).item()), torch.ones(torch.sum(1-sel).item())]).cuda()
         feat_1 = torch.cat(points_1_vec,0).transpose(0,1)
@@ -631,7 +690,7 @@ class JointLoss(nn.Module):
         # Collect equality annotations
         if judgements_eq.size(1) > 2:
             judgements_eq = judgements_eq.cuda()
-            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_eq, random_filp)
+            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_eq, random_filp, human_pair_classifier)
             gt_eq = gt * 0
 
             pred_eq = human_pair_classifier(torch.cat([feat_1, feat_2],1))
@@ -644,7 +703,7 @@ class JointLoss(nn.Module):
         # collect inequality annotations
         if judgements_ineq.size(1) > 2:
             judgements_ineq = judgements_ineq.cuda()
-            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_ineq, random_filp)
+            feat_1, feat_2, weight, gt = self.getPyrValues(prediction_R, judgements_ineq, random_filp, human_pair_classifier)
             gt_ineq = gt + 1
 
             pred_ineq = human_pair_classifier(torch.cat([feat_1, feat_2], 1))

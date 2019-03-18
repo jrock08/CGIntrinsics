@@ -48,6 +48,8 @@ class BaseOptions(object):
         self.parser.add_argument('--human_classifier_inner_dim', type=int, default=32)
         self.parser.add_argument('--bilinear_classifier',action='store_true')
 
+        self.parser.add_argument('--center_surround', action='store_true')
+
         self.parser.add_argument('--output_reflectance_dim', type=int, default=-1)
         self.parser.add_argument('--append_chroma', action='store_true')
         self.parser.add_argument('--num_pyr_levels', type=int, default=1)

@@ -21,7 +21,7 @@ import math
 opt = TrainOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
 
 DEBUG = opt.debug
-batch_size = 5*len(opt.gpu_ids)
+batch_size = 4*len(opt.gpu_ids)
 print('batch_size: {}'.format(batch_size))
 #batch_size = 4
 train_on_CGI = not (opt.pretrained_cgi)

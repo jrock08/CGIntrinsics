@@ -86,7 +86,7 @@ class Intrinsics_Model(BaseModel):
             model.load_state_dict(model_parameters)
 
         if opt.human_pair_classifier:
-            model.hpc = networks.get_human_pair_classifier(output_nc * opt.num_pyr_levels, opt.human_pair_classifier_type, opt.bilinear_classifier, opt.human_classifier_layers, opt.human_classifier_inner_dim)
+            model.hpc = networks.get_human_pair_classifier(output_nc * opt.num_pyr_levels, opt.human_pair_classifier_type, opt.bilinear_classifier, opt.human_classifier_layers, opt.human_classifier_inner_dim, opt.center_surround, self.gpu_ids)
             #model.hpc = networks.HumanPairClassifier(output_nc, opt.human_pair_classifier_type)
 
             if len(opt.gpu_ids) > 0:
