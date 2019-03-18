@@ -21,7 +21,7 @@ import math
 opt = TrainOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
 
 DEBUG = opt.debug
-batch_size = 4*len(opt.gpu_ids)
+batch_size = opt.batchSize*len(opt.gpu_ids)
 print('batch_size: {}'.format(batch_size))
 #batch_size = 4
 train_on_CGI = not (opt.pretrained_cgi)
@@ -56,7 +56,7 @@ iterator_Render = iter(dataset_Render)
 
 if train_on_IIW:
     train_list_IIW = full_root + '/CGIntrinsics/IIW/train_val_list/train_list/'
-    data_loader_IIW = CreateDataLoaderIIW(full_root, train_list_IIW, 0, batch_size)
+    data_loader_IIW = CreateDataLoaderIIW(full_root, train_list_IIW, 0, batch_size, opt.IIW_pair_clamp)
     dataset_IIW = data_loader_IIW.load_data()
     dataset_size_IIW = len(data_loader_IIW)
     print('#train_list_IIW images = %d' % dataset_size_IIW)

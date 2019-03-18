@@ -22,10 +22,10 @@ def CreateDataLoaderRelight(_root, batch_size=16):
 
     return data_loader
 
-def CreateDataLoaderIIW(_root, _list_dir, mode, batch_size=16):
+def CreateDataLoaderIIW(_root, _list_dir, mode, batch_size=16, clamp_pairs=-1):
     data_loader = None
     from data.aligned_data_loader import IIWDataLoader
-    data_loader = IIWDataLoader(_root, _list_dir, mode, batch_size)
+    data_loader = IIWDataLoader(_root, _list_dir, mode, batch_size, clamp_pairs=clamp_pairs)
 
     return data_loader
 

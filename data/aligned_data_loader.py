@@ -373,7 +373,7 @@ class SAWDataLoader(BaseDataLoader):
 
 
 class IIWDataLoader(BaseDataLoader):
-    def __init__(self,_root, _list_dir, mode, batch_size=16, is_train=True):
+    def __init__(self,_root, _list_dir, mode, batch_size=16, is_train=True, clamp_pairs=-1):
         # is_train lets us use the same dataloader for train and validation
         # BaseDataLoader.initialize(self)
         # self.fineSize = opt.fineSize
@@ -391,7 +391,7 @@ class IIWDataLoader(BaseDataLoader):
                 # list_dir = '/phoenix/S6/zl548/AMOS/test/list/',transform=transform)
         # testset
         dataset = IIW_ImageFolder(root=_root, \
-                    list_dir =_list_dir, mode = mode, is_flip = is_train, transform=transform)
+                    list_dir =_list_dir, mode = mode, is_flip = is_train, transform=transform, clamp_pairs=clamp_pairs)
 
         # Have to use 2 or fewer workers for IIW due to having a number of files open during reading.
         data_loader = torch.utils.data.DataLoader(dataset, batch_size= batch_size, shuffle = is_train, num_workers=min(int(2), int(NUM_WORKERS)), collate_fn = my_collate)

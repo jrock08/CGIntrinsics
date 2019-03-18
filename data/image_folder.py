@@ -515,7 +515,7 @@ class Render_ImageFolder(data.Dataset):
 class IIW_ImageFolder(data.Dataset):
 
     def __init__(self, root, list_dir, mode, is_flip, transform=None,
-                 loader=None, load_long_range_annotes = True):
+                 loader=None, load_long_range_annotes = True, clamp_pairs=-1):
         # load image list from hdf5
         img_list = make_dataset(list_dir)
         if len(img_list) == 0:
@@ -539,6 +539,7 @@ class IIW_ImageFolder(data.Dataset):
         y = np.arange(-1, 2)
         self.X, self.Y = np.meshgrid(x, y)
         self.load_long_range_annotes = load_long_range_annotes
+        self.clamp_pairs = clamp_pairs
 
     def set_o_idx(self, o_idx):
         self.current_o_idx = o_idx
@@ -661,7 +662,6 @@ class IIW_ImageFolder(data.Dataset):
         num_eq = np.float32(np.array(num_eq))
         num_eq = int(num_eq[0][0])
 
-
         if num_eq > 0:
             equal_mat = hdf5_file_read_img.get('/info/equal')
             equal_mat = np.float32(np.array(equal_mat))
@@ -682,8 +682,15 @@ class IIW_ImageFolder(data.Dataset):
         else:
             ineq_mat = torch.Tensor(1,1)
 
-
         hdf5_file_read_img.close()
+
+        if self.clamp_pairs > 0 and equal_mat.shape[0] > self.clamp_pairs:
+            sample = random.sample(range(equal_mat.shape[0]), self.clamp_pairs)
+            equal_mat = equal_mat.index_select(0, torch.tensor(sample, requires_grad=False))
+
+        if self.clamp_pairs > 0 and ineq_mat.shape[0] > self.clamp_pairs:
+            sample = random.sample(range(ineq_mat.shape[0]), self.clamp_pairs)
+            ineq_mat.index_select(0, torch.tensor(sample, requires_grad=False))
 
         return equal_mat, ineq_mat
 

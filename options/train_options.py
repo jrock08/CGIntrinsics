@@ -28,6 +28,7 @@ class TrainOptions(BaseOptions):
         self.parser.add_argument('--hot_start', action='store_true')
         self.parser.add_argument('--progressive_iiw_weight', action='store_true')
         self.parser.add_argument('--num_train_epochs', type=int, default=50)
+        self.parser.add_argument('--IIW_pair_clamp', type=int, default=1000, help='most of the images have a few hundred pairs, but a couple have 10ks, if you batch them together the gpus will oom, this avoids that')
         # NOT-IMPLEMENTED self.parser.add_argument('--preprocessing', type=str, default='resize_and_crop', help='resizing/cropping strategy')
         self.isTrain = True
 
