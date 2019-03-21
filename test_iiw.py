@@ -64,10 +64,13 @@ if __name__ == '__main__':
     #outp = test_iiw(model, 'train_val_list/val_list/')
     outp = test_iiw(model, 'test_list/', thresholds=opt.whdr_thresholds)
     with open('val_whdr.txt','a') as f:
+        f.write(opt.name + ' ' + opt.sub_name)
         f.write('WHDR {}\n'.format(outp[0]))
-    print 'WHDR {}'.format(outp[0])
-    print 'WHDR_EQ {}'.format(outp[1])
-    print 'WHDR_INEQ {}'.format(outp[2])
+        f.write('WHDR_EQ {}'.format(outp[1]))
+        f.write('WHDR_INEQ {}'.format(outp[2]))
+    print('WHDR {}'.format(outp[0]))
+    print('WHDR_EQ {}'.format(outp[1]))
+    print('WHDR_INEQ {}'.format(outp[2]))
     #for WHDR, WHDR_EQ, WHDR_INEQ in outp:
     #    print('WHDR %f'%WHDR)
 

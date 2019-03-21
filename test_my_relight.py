@@ -14,11 +14,12 @@ def test_relight(model, full_root = '/data/jrock/Relighting_2019/'):
     model.switch_to_eval()
 
     outp = []
-    #data_loader_relight_test = CreateDataLoaderRelight(full_root + '/myImageCompositingInputs/', 1)
-    data_loader_relight_test = CreateDataLoaderRelight(full_root + '/BoyadzhievImageCompositingInputs/', 1)
+    data_loader_relight_test = CreateDataLoaderRelight(full_root + '/myImageCompositingInputs/', 1)
+    #data_loader_relight_test = CreateDataLoaderRelight(full_root + '/BoyadzhievImageCompositingInputs/', 1)
     dataset_relight_test = data_loader_relight_test.load_data()
 
     written = set()
+    selected_ids = ['img_0', 'img_6', 'img_7']
     for i, data in enumerate(dataset_relight_test):
         img1 = .9 * data[0] + .1 * data[1]
         img2 = .1 * data[0] + .9 * data[1]
@@ -26,6 +27,12 @@ def test_relight(model, full_root = '/data/jrock/Relighting_2019/'):
         scene_id = data[2][0]
         img1_id = data[3][0]
         img2_id = data[4][0]
+        if not (img1_id in selected_ids and img2_id in selected_ids):
+            continue
+
+        img1 = img1/img1.max()
+        img2 = img2/img2.max()
+
         pred_R_1, pred_R_rgb_1, pred_S_1 = model.get_output_images(img1)
         pred_R_2, pred_R_rgb_2, pred_S_2 = model.get_output_images(img2)
 
@@ -57,7 +64,8 @@ def test_relight(model, full_root = '/data/jrock/Relighting_2019/'):
         img1_recon = pred_R_2 * pred_S_1
         img2_recon = pred_R_1 * pred_S_2
 
-        outp.append([scene_id, img1_id, img2_id] + [torch.mean((img1.cuda() - img1_recon)**2).cpu().item() + torch.mean((img2.cuda() - img2_recon)**2).cpu().item(),
+        
+        outp.append(scene_id.split('_') + [img1_id, img2_id] + [torch.mean((img1.cuda() - img1_recon)**2).cpu().item() + torch.mean((img2.cuda() - img2_recon)**2).cpu().item(),
         torch.mean((img1.cuda() - img1_auto_recon)**2).cpu().item() + torch.mean((img2.cuda() - img2_auto_recon)**2).cpu().item()])
         #print outp
 
@@ -76,27 +84,25 @@ if __name__ == '__main__':
     #print("WE ARE IN TESTING PHASE!!!!")
     #outp = test_relight(model, 'train_val_list/val_list/')
     outp = test_relight(model)
-    df = pandas.DataFrame(outp, columns=['scene','img1','img2','score_relight','score_recon'])
+    df = pandas.DataFrame(outp, columns=['scene','color','effect','img1','img2','score_relight','score_recon'])
     df.to_pickle('scores_df.pkl')
 
-    for img_id in range(10):
-        Z = df[(df['img1'] == 'img_%d'%(img_id)) | (df['img2'] == 'img_%d'%(img_id))].groupby('scene')['score_relight','score_recon'].agg(stats.gmean)
-        print 'img_contribution: %d'%(img_id)
-        print Z
+    base = df[df['effect']=='empty']
+    colors = df[df['effect']!='empty']
+    comp = pandas.merge(base, colors, on='scene', suffixes=('_base',''))
+    comp['relight_delta'] = comp['score_relight'] - comp['score_relight_base']
 
-    print 'by scene:'
-    print df.groupby('scene')[['score_relight','score_recon']].agg(stats.gmean)
+    matte_results = comp[comp['effect']=='matte'].groupby(['color']).mean()[['score_relight','relight_delta']]
+    glossy_results = comp[comp['effect']=='glossy'].groupby(['color']).mean()[['score_relight', 'relight_delta']]
 
-    print 'overall: '
-    print df[['score_relight','score_recon']].agg(stats.gmean)
 
-    with open('test_relight.txt','a') as f:
+    with open('test_my_relight.txt','a') as f:
         f.write(opt.name + ' ' + opt.sub_name + '\n')
-        f.write('by scene:\n')
-        f.write('{}\n'.format(df.groupby('scene')[['score_relight','score_recon']].agg(stats.gmean)))
+        f.write('matte:\n')
+        f.write('{}\n'.format(matte_results))
 
-        f.write('overall:\n')
-        f.write('{}\n'.format(df[['score_relight','score_recon']].agg(stats.gmean)))
+        f.write('glossy:\n')
+        f.write('{}\n'.format(glossy_results))
 
 
     #for WHDR, WHDR_EQ, WHDR_INEQ in outp:
