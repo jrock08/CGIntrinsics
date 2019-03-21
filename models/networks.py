@@ -1577,6 +1577,34 @@ class JointLoss(nn.Module):
                 rows, cols = img.shape[2:]
                 p1.append(img[0, : ,int(point1['y'] * rows), int(point1['x'] * cols)].unsqueeze(0))
                 p2.append(img[0, : ,int(point2['y'] * rows), int(point2['x'] * cols)].unsqueeze(0))
+                if human_classifier.center_surround:
+                    surround_1 = None
+                    surround_2 = None
+                    count_surround_1 = None
+                    count_surround_2 = None
+                    for xd in [-1,0,1]:
+                        for yd in [-1,0,1]:
+                            y1_d = int(point1['y'] * rows) + yd
+                            x1_d = int(point1['x'] * cols) + xd
+                            if not(y1_d <= 0 | y1_d > rows | x1_d <= 0 | x1_d > cols):
+                                if surround_1 is not None:
+                                    surround_1 += img[0,:,y1_d,x1_d].unsqueeze(0)
+                                    count_surround_1 += 1.0
+                                else:
+                                    surround_1 = img[0,:,y1_d,x1_d].unsqueeze(0)
+                                    count_surround_1 = 1.0
+                            y2_d = int(point2['y'] * rows) + yd
+                            x2_d = int(point2['x'] * cols) + xd
+                            if not(y2_d <= 0 | y2_d > rows | x2_d <= 0 | x2_d > cols):
+                                if surround_2 is not None:
+                                    surround_2 += img[0,:,y2_d,x2_d].unsqueeze(0)
+                                    count_surround_2 += 1.0
+                                else:
+                                    surround_2 = img[0,:,y2_d,x2_d].unsqueeze(0)
+                                    count_surround_2 = 1.0
+                    p1[-1] = torch.cat([p1[-1], surround_1 / count_surround_1], 1)
+                    p2[-1] = torch.cat([p2[-1], surround_2 / count_surround_2], 1)
+
             p1 = torch.cat(p1,1)
             p2 = torch.cat(p2,1)
 
