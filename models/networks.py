@@ -131,6 +131,8 @@ class ResidualNetwork(nn.Module):
 
 
 def get_human_pair_classifier(in_dim, model_type, bilinear, num_layers, inner_dim, center_surround, gpu_ids):
+    if model_type == 'lm_new':
+        return LMHumanPairClassifier(in_dim, model_type, bilinear, num_layers, inner_dim, center_surround, gpu_ids)
     if model_type == 'ternary':
         return HumanPairClassifier(in_dim, model_type, bilinear, num_layers, inner_dim, center_surround, gpu_ids)
     elif model_type == 'binary':
@@ -139,6 +141,45 @@ def get_human_pair_classifier(in_dim, model_type, bilinear, num_layers, inner_di
         return SingleScoreHumanClassifier(in_dim, model_type, False, bilinear, num_layers, inner_dim, center_surround, gpu_ids)
     elif model_type == 'single_score_const_thresh':
         return SingleScoreHumanClassifier(in_dim, 'single_score', True, bilinear, num_layers, inner_dim, center_surround, gpu_ids)
+
+class LMHumanPairClassifier(nn.Module):
+    def __init__(self, in_dim, model_type, bilinear=False, inner_layers = -1, inner_dim = 32, center_surround=False, gpu_ids = []):
+        super(LMHumanPairClassifier, self).__init__()
+        self.model_type = 'binary'
+        self.bilinear = bilinear
+        self.center_surround = center_surround
+        self.gpu_ids = gpu_ids
+
+        in_dim = in_dim*3 + (in_dim-4)*2
+        out_dim = 2
+
+        if inner_layers < 0:
+            self.model = nn.Sequential(nn.Linear(in_dim, out_dim))
+        else:
+            model_list = [nn.Linear(in_dim, inner_dim*(2**inner_layers)), nn.ReLU()]
+            for i in range(inner_layers):
+                model_list.append(nn.Linear(inner_dim*(2**(inner_layers-i)), inner_dim * (2 ** (inner_layers - (i+1)))))
+                model_list.append(nn.ReLU())
+            model_list.append(nn.Linear(inner_dim, out_dim))
+            self.model = nn.Sequential(*model_list)
+
+
+    def forward(self, X):
+        [x1,x2] = torch.chunk(X, 2, 1)
+        x1_ = torch.split(x1, 4, 1)
+        x2_ = torch.split(x2, 4, 1)
+
+        full_vec = [X]
+        for i in range(len(x1_)-1):
+            full_vec.append(x1_[i] - x1_[i+1])
+            full_vec.append(x2_[i] - x2_[i+1])
+        for i in range(len(x1_)):
+            full_vec.append(x1_[i] - x2_[i])
+
+        if self.gpu_ids and isinstance(X.data, torch.cuda.FloatTensor):
+            return nn.parallel.data_parallel(self.model, torch.cat(full_vec,1), self.gpu_ids)
+        else:
+            return self.model(torch.cat(full_vec,1))
 
 class HumanPairClassifier(nn.Module):
     def __init__(self, in_dim, model_type, bilinear=False, inner_layers = -1, inner_dim = 32, center_surround=False, gpu_ids = []):
