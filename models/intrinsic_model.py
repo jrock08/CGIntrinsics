@@ -230,7 +230,7 @@ class Intrinsics_Model(BaseModel):
         chroma = input_images / torch.clamp(torch.sum(input_images,1,keepdim=True), min=1e-2)
         prediction_RGB = (torch.exp(prediction_R.detach()) * chroma).clamp(min=0,max=1)
 
-        return self.criterion_joint.evaluate_WHDR(prediction_R_human, targets, threshold, self.netG.hpc), prediction_RGB
+        return self.criterion_joint.evaluate_WHDR(prediction_R_human, targets, threshold, self.netG.hpc), prediction_RGB, prediction_S
 
     def get_output_images(self, input_):
         input_images = Variable(input_.cuda() , requires_grad = False)

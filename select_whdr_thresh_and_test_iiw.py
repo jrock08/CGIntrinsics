@@ -14,6 +14,7 @@ from data.data_loader import CreateDataLoaderIIW
 import torchvision
 
 if __name__ == '__main__':
+    import os
     opt = TestOptions().parse()  # set CUDA_VISIBLE_DEVICES before import torch
 
     model = create_model(opt)
@@ -22,7 +23,11 @@ if __name__ == '__main__':
     val_outp = test_iiw(model, 'train_val_list/val_list/', thresholds=whdr_thresholds)
     whdr_test = whdr_thresholds[np.argmin(val_outp[0])]
 
-    outp = test_iiw(model, 'test_list/', thresholds=[whdr_test])
+    img_out_dir = '/data/jrock/out_relight_2019/iiw/' + opt.name + '_' + opt.sub_name + '/'
+    if not os.path.exists(img_out_dir):
+        os.makedirs(img_out_dir)
+
+    outp = test_iiw(model, 'test_list/', thresholds=[whdr_test], img_out_dir=img_out_dir)
 
     with open('val_whdr.txt','a') as f:
         f.write(opt.name + ' ' + opt.sub_name + '\n')
